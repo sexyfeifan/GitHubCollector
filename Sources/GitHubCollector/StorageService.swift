@@ -35,6 +35,43 @@ struct StorageService {
         categoryDir(baseDir: baseDir, category).appendingPathComponent(safe(project), isDirectory: true)
     }
 
+    func hasProjectDirectory(baseDir: URL, project: String) -> Bool {
+        let safeProject = safe(project)
+        guard let categories = try? fm.contentsOfDirectory(
+            at: baseDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        for categoryDir in categories {
+            let candidate = categoryDir.appendingPathComponent(safeProject, isDirectory: true)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                return true
+            }
+        }
+        return false
+    }
+
+    func removeProjectDirectories(baseDir: URL, project: String) {
+        let safeProject = safe(project)
+        guard let categories = try? fm.contentsOfDirectory(
+            at: baseDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for categoryDir in categories {
+            let candidate = categoryDir.appendingPathComponent(safeProject, isDirectory: true)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                try? fm.removeItem(at: candidate)
+            }
+        }
+    }
+
     func saveOrUpdate(_ draft: RepoDraft, baseDir: URL) throws -> RepoRecord {
         try prepareBaseIfNeeded(baseDir: baseDir)
 

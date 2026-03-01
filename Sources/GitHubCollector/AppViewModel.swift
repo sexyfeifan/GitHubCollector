@@ -41,6 +41,23 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    enum ImportSkipError: Error, LocalizedError {
+        case alreadyExists(String)
+        case staleProject(lastUpdated: String)
+        case closedProject
+
+        var errorDescription: String? {
+            switch self {
+            case .alreadyExists(let name):
+                return "本地已存在项目，已跳过：\(name)"
+            case .staleProject(let lastUpdated):
+                return "项目最近 3 年无更新（最后更新：\(lastUpdated)），已跳过。"
+            case .closedProject:
+                return "项目已归档或禁用，已跳过。"
+            }
+        }
+    }
+
     @Published var inputURL: String = ""
     @Published var isLoading = false
     @Published var statusMessage: String = ""
@@ -72,6 +89,8 @@ final class AppViewModel: ObservableObject {
     private var pauseRequested = false
     private var stopRequested = false
     private var queueTask: Task<Void, Never>?
+    private var knownRecordIDs: Set<String> = []
+    private var currentProjectName: String = ""
 
     private let github = GitHubService()
     private let translator = TranslatorService()
@@ -90,6 +109,7 @@ final class AppViewModel: ObservableObject {
         retryCount = s.retryCount
         downloadRootPath = s.downloadRootPath
         includeNoPackageProjects = s.includeNoPackageProjects
+        loadSettingsFromSelectedDirectoryIfAvailable()
         totalTrafficBytes = settings.loadTotalTrafficBytes()
         reloadRecords()
     }
@@ -164,17 +184,9 @@ final class AppViewModel: ObservableObject {
     }
 
     func saveSettings() {
-        settings.save(
-            AppSettings(
-                githubToken: githubToken,
-                openAIKey: openAIKey,
-                openAIBaseURL: openAIBaseURL,
-                openAIModel: openAIModel,
-                retryCount: retryCount,
-                downloadRootPath: downloadRootPath,
-                includeNoPackageProjects: includeNoPackageProjects
-            )
-        )
+        let current = currentSettings()
+        settings.save(current)
+        saveSettingsToCurrentDirectory(current)
         reloadRecords()
         statusMessage = "设置已保存。"
     }
@@ -313,6 +325,7 @@ final class AppViewModel: ObservableObject {
         panel.prompt = "选择"
         if panel.runModal() == .OK, let url = panel.url {
             downloadRootPath = url.path
+            loadSettingsFromSelectedDirectoryIfAvailable()
             saveSettings()
         }
     }
@@ -357,7 +370,11 @@ final class AppViewModel: ObservableObject {
         crawlState = .idle
         isLoading = false
         statusMessage = "已停止抓取。"
-        appendLog("抓取已停止。")
+        if !currentProjectName.isEmpty {
+            appendLog("抓取已停止，当前项目将丢弃：\(currentProjectName)")
+        } else {
+            appendLog("抓取已停止。")
+        }
     }
 
     func retryFailedImports() {
@@ -418,6 +435,7 @@ final class AppViewModel: ObservableObject {
         do {
             let records = try storage.loadRecords(baseDir: activeBaseDir)
             self.records = records
+            self.knownRecordIDs = Set(records.map { $0.id })
             ensureValidPage()
         } catch {
             errorMessage = "读取本地记录失败: \(error.localizedDescription)"
@@ -434,6 +452,38 @@ final class AppViewModel: ObservableObject {
         storage.resolvedBaseDir(customPath: downloadRootPath)
     }
 
+    private func currentSettings() -> AppSettings {
+        AppSettings(
+            githubToken: githubToken,
+            openAIKey: openAIKey,
+            openAIBaseURL: openAIBaseURL,
+            openAIModel: openAIModel,
+            retryCount: retryCount,
+            downloadRootPath: downloadRootPath,
+            includeNoPackageProjects: includeNoPackageProjects
+        )
+    }
+
+    private func saveSettingsToCurrentDirectory(_ settingsValue: AppSettings) {
+        do {
+            try settings.saveToDirectory(settingsValue, baseDir: activeBaseDir)
+        } catch {
+            appendLog("目录设置保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func loadSettingsFromSelectedDirectoryIfAvailable() {
+        if let disk = settings.loadFromDirectory(baseDir: activeBaseDir) {
+            githubToken = disk.githubToken
+            openAIKey = disk.openAIKey
+            openAIBaseURL = disk.openAIBaseURL
+            openAIModel = disk.openAIModel
+            retryCount = disk.retryCount
+            includeNoPackageProjects = disk.includeNoPackageProjects
+            appendLog("已从下载目录加载设置。")
+        }
+    }
+
     private func prepareQueue(with urls: [String]) {
         errorMessage = ""
         statusMessage = "准备处理 \(urls.count) 个链接..."
@@ -445,6 +495,8 @@ final class AppViewModel: ObservableObject {
         queuedURLs = urls
         currentQueueIndex = 0
         queueItems = urls.map { QueueItem(url: $0, status: .pending, detail: "等待开始") }
+        currentProjectName = ""
+        reloadRecords()
     }
 
     private func resumeCrawl() {
@@ -491,14 +543,52 @@ final class AppViewModel: ObservableObject {
             queueItems[i].detail = "开始抓取"
             statusMessage = "(\(i + 1)/\(urls.count)) 处理中：\(urls[i])"
             appendLog("开始抓取：\(urls[i])")
+            currentProjectName = projectNameFromURL(urls[i])
 
             do {
                 let record = try await importOne(url: urls[i], retries: retryCount)
+                if stopRequested || Task.isCancelled {
+                    try? storage.deleteRecord(record, baseDir: activeBaseDir, removeFiles: true)
+                    storage.removeProjectDirectories(baseDir: activeBaseDir, project: record.projectName)
+                    queueItems[i].status = .failed
+                    queueItems[i].detail = "已停止，当前项目未保存"
+                    appendLog("停止后已丢弃当前项目：\(record.fullName)")
+                    crawlState = .idle
+                    isLoading = false
+                    statusMessage = "已停止抓取。"
+                    currentProjectName = ""
+                    reloadRecords()
+                    return
+                }
                 queueItems[i].status = .success
                 queueItems[i].detail = "已完成：\(record.projectName)"
                 appendLog("抓取成功：\(record.fullName) - 版本 \(record.releaseTag)")
+                knownRecordIDs.insert(record.id)
                 // 抓取进行中实时入库刷新
                 reloadRecords()
+            } catch is CancellationError {
+                if stopRequested || Task.isCancelled {
+                    if let parsed = try? URLParser.parseGitHubRepo(from: urls[i]) {
+                        storage.removeProjectDirectories(baseDir: activeBaseDir, project: parsed.name)
+                    }
+                    queueItems[i].status = .failed
+                    queueItems[i].detail = "已停止，当前项目未保存"
+                    appendLog("停止后已清理当前项目临时数据：\(urls[i])")
+                    crawlState = .idle
+                    isLoading = false
+                    statusMessage = "已停止抓取。"
+                    currentProjectName = ""
+                    reloadRecords()
+                    return
+                }
+            } catch let skip as ImportSkipError {
+                queueItems[i].status = .success
+                queueItems[i].detail = skip.errorDescription ?? "已跳过"
+                appendLog(skip.errorDescription ?? "已跳过当前项目。")
+            } catch let skip as ImportError {
+                queueItems[i].status = .success
+                queueItems[i].detail = skip.errorDescription ?? "已跳过"
+                appendLog(skip.errorDescription ?? "已跳过当前项目。")
             } catch {
                 queueItems[i].status = .failed
                 queueItems[i].detail = error.localizedDescription
@@ -513,6 +603,7 @@ final class AppViewModel: ObservableObject {
                 appendLog("抓取失败：\(urls[i])，原因：\(error.localizedDescription)")
             }
             fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
+            currentProjectName = ""
 
             if pauseRequested {
                 queueItems[i].status = .pending
@@ -565,13 +656,40 @@ final class AppViewModel: ObservableObject {
 
     private func importOneAttempt(url: String) async throws -> RepoRecord {
         let identity = try URLParser.parseGitHubRepo(from: url)
+        let id = identity.fullName.lowercased()
+
+        if knownRecordIDs.contains(id) {
+            throw ImportSkipError.alreadyExists(identity.fullName)
+        }
+        if storage.hasProjectDirectory(baseDir: activeBaseDir, project: identity.name) {
+            throw ImportSkipError.alreadyExists(identity.fullName)
+        }
 
         let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
         async let repo = github.fetchRepo(identity, token: token)
         async let readme = github.fetchReadmeText(identity, token: token)
         async let release = github.fetchLatestRelease(identity, token: token)
 
-        let fetchedRepo = try await repo
+        let fetchedRepo: GitHubRepo
+        do {
+            fetchedRepo = try await repo
+        } catch let serviceError as GitHubServiceError {
+            if case .repoUnavailable = serviceError {
+                throw ImportSkipError.closedProject
+            }
+            throw serviceError
+        }
+        if fetchedRepo.archived == true || fetchedRepo.disabled == true {
+            throw ImportSkipError.closedProject
+        }
+        if let updatedAt = parsedGitHubDate(fetchedRepo.updatedAt),
+           updatedAt < threeYearsAgoDate() {
+            throw ImportSkipError.staleProject(lastUpdated: formattedDate(updatedAt))
+        }
+        if storage.hasProjectDirectory(baseDir: activeBaseDir, project: fetchedRepo.name) {
+            throw ImportSkipError.alreadyExists(fetchedRepo.fullName)
+        }
+
         let fetchedReadme = await readme
         let fetchedRelease = try await release
         appendLog("已读取仓库数据：\(fetchedRepo.fullName)")
@@ -629,6 +747,11 @@ final class AppViewModel: ObservableObject {
             projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         }
 
+        if Task.isCancelled || stopRequested {
+            storage.removeProjectDirectories(baseDir: activeBaseDir, project: fetchedRepo.name)
+            throw CancellationError()
+        }
+
         if let imageURL = extractFirstImageURL(from: fetchedReadme, repo: identity) {
             previewImagePath = await downloader.downloadImage(from: imageURL, to: projectDir)
             if !previewImagePath.isEmpty {
@@ -658,7 +781,6 @@ final class AppViewModel: ObservableObject {
             localPath: localPath,
             previewImagePath: previewImagePath
         )
-
         return try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
     }
 
@@ -835,6 +957,28 @@ final class AppViewModel: ObservableObject {
             return ns.substring(with: m.range(at: 1))
         }
         return fallback
+    }
+
+    private func parsedGitHubDate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let f1 = ISO8601DateFormatter()
+        f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = f1.date(from: raw) {
+            return date
+        }
+        let f2 = ISO8601DateFormatter()
+        f2.formatOptions = [.withInternetDateTime]
+        return f2.date(from: raw)
+    }
+
+    private func threeYearsAgoDate() -> Date {
+        Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? Date.distantPast
+    }
+
+    private func formattedDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
     }
 
     private func appendLog(_ message: String) {

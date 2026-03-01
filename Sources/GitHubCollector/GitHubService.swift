@@ -5,6 +5,7 @@ enum GitHubServiceError: Error, LocalizedError {
     case missingRelease
     case missingAsset
     case rateLimited(resetAt: Date?)
+    case repoUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +23,8 @@ enum GitHubServiceError: Error, LocalizedError {
                 return "GitHub API 已限流，请在 \(f.string(from: resetAt)) 后重试，或在设置中配置 GitHub Token。"
             }
             return "GitHub API 已限流，请稍后重试，或在设置中配置 GitHub Token。"
+        case .repoUnavailable:
+            return "仓库不存在、已关闭或无访问权限。"
         }
     }
 }
@@ -42,6 +45,9 @@ struct GitHubService {
         }
         if http.statusCode == 403, isRateLimited(http) {
             throw GitHubServiceError.rateLimited(resetAt: resetDate(http))
+        }
+        if http.statusCode == 404 || http.statusCode == 410 {
+            throw GitHubServiceError.repoUnavailable
         }
         guard (200...299).contains(http.statusCode) else {
             throw GitHubServiceError.invalidResponse

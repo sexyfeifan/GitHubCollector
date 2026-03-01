@@ -15,6 +15,9 @@ struct GitHubRepo: Decodable {
     let stargazersCount: Int
     let htmlURL: URL
     let topics: [String]?
+    let updatedAt: String?
+    let archived: Bool?
+    let disabled: Bool?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -24,6 +27,9 @@ struct GitHubRepo: Decodable {
         case stargazersCount = "stargazers_count"
         case htmlURL = "html_url"
         case topics
+        case updatedAt = "updated_at"
+        case archived
+        case disabled
     }
 }
 
