@@ -4,6 +4,7 @@ enum GitHubServiceError: Error, LocalizedError {
     case invalidResponse
     case missingRelease
     case missingAsset
+    case rateLimited(resetAt: Date?)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +14,14 @@ enum GitHubServiceError: Error, LocalizedError {
             return "该项目暂无可用 Release。"
         case .missingAsset:
             return "最新 Release 没有可下载资产。"
+        case .rateLimited(let resetAt):
+            if let resetAt {
+                let f = DateFormatter()
+                f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                f.timeZone = TimeZone.current
+                return "GitHub API 已限流，请在 \(f.string(from: resetAt)) 后重试，或在设置中配置 GitHub Token。"
+            }
+            return "GitHub API 已限流，请稍后重试，或在设置中配置 GitHub Token。"
         }
     }
 }
@@ -23,24 +32,29 @@ struct GitHubService {
         return d
     }()
 
-    func fetchRepo(_ identity: RepoIdentity) async throws -> GitHubRepo {
+    func fetchRepo(_ identity: RepoIdentity, token: String) async throws -> GitHubRepo {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)")!
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("GitHubCollector", forHTTPHeaderField: "User-Agent")
+        let request = makeRequest(url: url, token: token)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
+            throw GitHubServiceError.invalidResponse
+        }
+        if http.statusCode == 403, isRateLimited(http) {
+            throw GitHubServiceError.rateLimited(resetAt: resetDate(http))
+        }
+        guard (200...299).contains(http.statusCode) else {
             throw GitHubServiceError.invalidResponse
         }
 
         return try decoder.decode(GitHubRepo.self, from: data)
     }
 
-    func fetchReadmeText(_ identity: RepoIdentity) async -> String {
+    func fetchReadmeText(_ identity: RepoIdentity, token: String) async -> String {
         do {
             let url = URL(string: "https://raw.githubusercontent.com/\(identity.owner)/\(identity.name)/HEAD/README.md")!
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let request = makeRequest(url: url, token: token)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 return ""
             }
@@ -50,17 +64,18 @@ struct GitHubService {
         }
     }
 
-    func fetchLatestRelease(_ identity: RepoIdentity) async throws -> GitHubRelease? {
+    func fetchLatestRelease(_ identity: RepoIdentity, token: String) async throws -> GitHubRelease? {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/releases/latest")!
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("GitHubCollector", forHTTPHeaderField: "User-Agent")
+        let request = makeRequest(url: url, token: token)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw GitHubServiceError.invalidResponse }
 
         if http.statusCode == 404 {
             return nil
+        }
+        if http.statusCode == 403, isRateLimited(http) {
+            throw GitHubServiceError.rateLimited(resetAt: resetDate(http))
         }
 
         guard (200...299).contains(http.statusCode) else {
@@ -112,17 +127,21 @@ struct GitHubService {
         return true
     }
 
-    func fetchStarredRepoURLs(username: String) async throws -> [String] {
+    func fetchStarredRepoURLs(username: String, token: String) async throws -> [String] {
         var page = 1
         var all: [String] = []
         while page <= 20 {
             let url = URL(string: "https://api.github.com/users/\(username)/starred?per_page=100&page=\(page)")!
-            var request = URLRequest(url: url)
-            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            request.setValue("GitHubCollector", forHTTPHeaderField: "User-Agent")
+            let request = makeRequest(url: url, token: token)
 
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            guard let http = response as? HTTPURLResponse else {
+                throw GitHubServiceError.invalidResponse
+            }
+            if http.statusCode == 403, isRateLimited(http) {
+                throw GitHubServiceError.rateLimited(resetAt: resetDate(http))
+            }
+            guard (200...299).contains(http.statusCode) else {
                 throw GitHubServiceError.invalidResponse
             }
 
@@ -133,5 +152,29 @@ struct GitHubService {
             page += 1
         }
         return Array(Set(all)).sorted()
+    }
+
+    private func makeRequest(url: URL, token: String) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("GitHubCollector", forHTTPHeaderField: "User-Agent")
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty {
+            request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    private func isRateLimited(_ response: HTTPURLResponse) -> Bool {
+        if let remaining = response.value(forHTTPHeaderField: "x-ratelimit-remaining"), remaining == "0" {
+            return true
+        }
+        return false
+    }
+
+    private func resetDate(_ response: HTTPURLResponse) -> Date? {
+        guard let reset = response.value(forHTTPHeaderField: "x-ratelimit-reset"),
+              let ts = TimeInterval(reset) else { return nil }
+        return Date(timeIntervalSince1970: ts)
     }
 }

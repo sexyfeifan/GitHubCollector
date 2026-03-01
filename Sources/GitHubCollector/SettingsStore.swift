@@ -1,6 +1,7 @@
 import Foundation
 
 struct AppSettings {
+    var githubToken: String = ""
     var openAIKey: String = ""
     var openAIBaseURL: String = "https://api.openai.com/v1"
     var openAIModel: String = "gpt-4.1-mini"
@@ -11,6 +12,7 @@ struct AppSettings {
 
 struct SettingsStore {
     private enum Keys {
+        static let githubToken = "settings.github.token"
         static let openAIKey = "settings.openai.key"
         static let openAIBaseURL = "settings.openai.base_url"
         static let openAIModel = "settings.openai.model"
@@ -24,6 +26,7 @@ struct SettingsStore {
 
     func load() -> AppSettings {
         var s = AppSettings()
+        s.githubToken = ud.string(forKey: Keys.githubToken) ?? ""
         s.openAIKey = ud.string(forKey: Keys.openAIKey) ?? ""
         s.openAIBaseURL = ud.string(forKey: Keys.openAIBaseURL) ?? s.openAIBaseURL
         s.openAIModel = ud.string(forKey: Keys.openAIModel) ?? s.openAIModel
@@ -39,6 +42,7 @@ struct SettingsStore {
     }
 
     func save(_ settings: AppSettings) {
+        ud.set(settings.githubToken, forKey: Keys.githubToken)
         ud.set(settings.openAIKey, forKey: Keys.openAIKey)
         ud.set(settings.openAIBaseURL, forKey: Keys.openAIBaseURL)
         ud.set(settings.openAIModel, forKey: Keys.openAIModel)

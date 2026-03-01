@@ -50,6 +50,7 @@ final class AppViewModel: ObservableObject {
     @Published var searchQuery: String = ""
     @Published var currentPage: Int = 1
 
+    @Published var githubToken: String = ""
     @Published var openAIKey: String = ""
     @Published var openAIBaseURL: String = "https://api.openai.com/v1"
     @Published var openAIModel: String = "gpt-4.1-mini"
@@ -82,6 +83,7 @@ final class AppViewModel: ObservableObject {
 
     init() {
         let s = settings.load()
+        githubToken = s.githubToken
         openAIKey = s.openAIKey
         openAIBaseURL = s.openAIBaseURL
         openAIModel = s.openAIModel
@@ -164,6 +166,7 @@ final class AppViewModel: ObservableObject {
     func saveSettings() {
         settings.save(
             AppSettings(
+                githubToken: githubToken,
                 openAIKey: openAIKey,
                 openAIBaseURL: openAIBaseURL,
                 openAIModel: openAIModel,
@@ -199,6 +202,20 @@ final class AppViewModel: ObservableObject {
         if let text = value, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             openAIKey = text.trimmingCharacters(in: .whitespacesAndNewlines)
             statusMessage = "已粘贴 API Key。"
+        } else {
+            errorMessage = "剪贴板没有可用文本。"
+        }
+    }
+
+    func pasteGitHubTokenFromClipboard() {
+        let pb = NSPasteboard.general
+        let value = pb.string(forType: .string)
+            ?? pb.string(forType: .URL)
+            ?? pb.string(forType: .fileURL)
+
+        if let text = value, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            githubToken = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            statusMessage = "已粘贴 GitHub Token。"
         } else {
             errorMessage = "剪贴板没有可用文本。"
         }
@@ -549,9 +566,10 @@ final class AppViewModel: ObservableObject {
     private func importOneAttempt(url: String) async throws -> RepoRecord {
         let identity = try URLParser.parseGitHubRepo(from: url)
 
-        async let repo = github.fetchRepo(identity)
-        async let readme = github.fetchReadmeText(identity)
-        async let release = github.fetchLatestRelease(identity)
+        let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        async let repo = github.fetchRepo(identity, token: token)
+        async let readme = github.fetchReadmeText(identity, token: token)
+        async let release = github.fetchLatestRelease(identity, token: token)
 
         let fetchedRepo = try await repo
         let fetchedReadme = await readme
@@ -681,7 +699,7 @@ final class AppViewModel: ObservableObject {
 
     private func syncRecordIfNeeded(_ record: RepoRecord) async throws -> Bool {
         let identity = try URLParser.parseGitHubRepo(from: record.sourceURL)
-        let latestRelease = try await github.fetchLatestRelease(identity)
+        let latestRelease = try await github.fetchLatestRelease(identity, token: githubToken)
         guard
             let release = latestRelease,
             let latestAsset = github.selectBestAsset(from: release.assets)
@@ -873,7 +891,7 @@ final class AppViewModel: ObservableObject {
             if let username = URLParser.parseGitHubStarsUser(from: raw) {
                 appendLog("检测到 stars 页面，开始抓取用户 \(username) 的星标仓库...")
                 do {
-                    let starred = try await github.fetchStarredRepoURLs(username: username)
+                    let starred = try await github.fetchStarredRepoURLs(username: username, token: githubToken)
                     appendLog("用户 \(username) 星标仓库数量：\(starred.count)")
                     expanded.append(contentsOf: starred)
                 } catch {

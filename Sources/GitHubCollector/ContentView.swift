@@ -224,6 +224,30 @@ struct ContentView: View {
             Text("OpenAI")
                 .font(.headline)
 
+            Text("GitHub API")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("GitHub Token（用于提升 API 配额）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $vm.githubToken)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(height: 40)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.gray.opacity(0.35), lineWidth: 1)
+                            .allowsHitTesting(false)
+                    )
+                HStack {
+                    Button("粘贴 GitHub Token") { vm.pasteGitHubTokenFromClipboard() }
+                        .buttonStyle(.bordered)
+                    Spacer()
+                }
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("API Key")
                     .font(.caption)
