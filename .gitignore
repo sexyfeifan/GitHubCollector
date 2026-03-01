@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# SwiftPM build artifacts
+GitHubCollector/.build/
+GitHubCollector/.build-cache/
+GitHubCollector/.clang-cache/
+
+# Xcode user data
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
