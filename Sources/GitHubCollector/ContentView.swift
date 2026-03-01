@@ -552,6 +552,7 @@ private struct RepoCard: View {
                 LocalPreviewImage(path: record.previewImagePath)
                     .frame(maxWidth: .infinity)
                     .frame(height: 120)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
@@ -670,6 +671,7 @@ private struct RepoDetailView: View {
                         LocalPreviewImage(path: record.previewImagePath)
                             .frame(maxWidth: .infinity)
                             .frame(height: 220)
+                            .clipped()
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     section(
@@ -743,12 +745,15 @@ private struct LocalPreviewImage: View {
     let path: String
 
     var body: some View {
-        if let image = NSImage(contentsOfFile: path) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFill()
-        } else {
-            EmptyView()
+        ZStack {
+            Rectangle()
+                .fill(Color(NSColor.controlBackgroundColor))
+            if let image = NSImage(contentsOfFile: path) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(6)
+            }
         }
     }
 }
