@@ -221,9 +221,6 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
 
-            Text("OpenAI")
-                .font(.headline)
-
             Text("GitHub API")
                 .font(.headline)
 
@@ -247,6 +244,9 @@ struct ContentView: View {
             }
 
             Divider()
+
+            Text("OpenAI API")
+                .font(.headline)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("API Key")
