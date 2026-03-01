@@ -1,75 +1,86 @@
 # GitHubCollector (macOS)
 
-一个 macOS 端 GitHub 软件抓取与本地软件库管理工具：
+GitHubCollector 是一个 macOS 桌面工具，用于批量收集 GitHub 项目、自动下载最新 Release 安装包，并在本地形成可搜索的软件库。
 
-- 粘贴 GitHub 链接自动识别 `owner/repo`
-- 抓取项目介绍（Repo + README）
-- 生成中文介绍（支持 OpenAI 翻译，失败自动回退原文）
-- 自动总结简介
-- 抓取最新 Release 并优选安装包 (`.dmg/.pkg/.zip`)
-- 下载到本地并按分类平铺展示，支持二次安装
-- 支持批量链接导入（每行一个）、队列进度展示、失败重试
-- 内置 OpenAI 翻译配置（可选，留空则不调用在线翻译）
-- 新增粘贴按钮（剪贴板一键导入）
-- 输入面板修复键盘输入与粘贴命中问题
-- 设置抽屉中的 OpenAI 输入改为稳定可编辑文本区
-- 首页新增搜索、抓取精度条、抓取实时日志
-- 日志新增单文件下载进度、速度、下载链接
-- 支持粘贴 `https://github.com/<username>?tab=stars` 批量抓取该用户星标仓库
-- “纳入无安装包项目”已迁移到设置抽屉
-- 无安装包项目可选择是否纳入，并自动归类到“无安装包项目”
-- 卡片支持弹出详情窗口（含关闭按钮）：简介与 Release Notes 的中英对照
-- 卡片支持展开删除面板（仅删记录 / 删除记录+文件）
-- 设置集中到右侧设置抽屉，不再占用首页空间
-- 删除项目后即时从首页消失（防止目录扫描回流）
-- 抓取内容自动清洗，剔除徽章/链接/图片 markdown 等无关文本
-- 若抓到图片会下载到本地并在卡片与详情窗口显示
-- 分类策略升级，默认回落到“通用工具”而非“未分类”
-- 同步库会对比 GitHub 版本，发现新版本自动下载并归档旧版本到 `过期版本/<旧版本>/`
-- 可自定义下载目录，并自动扫描该目录下已下载软件
-- 新增项目会在项目目录写入 `README_COLLECTOR.md` 和 `project_info.json`
+## 主要功能
 
-## 目录结构
+- 识别并抓取 GitHub 仓库链接：`https://github.com/<owner>/<repo>`
+- 支持 stars 页面批量导入：`https://github.com/<username>?tab=stars`
+- 自动抓取仓库简介、README、最新 Release 信息
+- 支持中文翻译（可配置 OpenAI，失败自动回退原文）
+- 生成简要摘要，首页卡片快速浏览
+- 自动下载并优选安装包（支持更多格式）
+- 同步库：对比远程版本，发现新版本自动下载并归档旧版本
+- 本地分类管理、搜索过滤、分页展示（每页 12 项）
+- 失败项目汇总（含项目名、GitHub 链接、失败原因）
+- 详情窗口支持 Markdown 渲染 / 原文切换
+- 抓取实时日志（含下载链接、速度、进度），并支持展开单独查看
 
-- `Sources/GitHubCollector/GitHubCollectorApp.swift`: 应用入口
-- `Sources/GitHubCollector/ContentView.swift`: UI
-- `Sources/GitHubCollector/AppViewModel.swift`: 主流程编排
-- `Sources/GitHubCollector/GitHubService.swift`: GitHub API 抓取
-- `Sources/GitHubCollector/DownloadService.swift`: Release 下载
-- `Sources/GitHubCollector/StorageService.swift`: 本地持久化
+## 安装包格式支持
+
+下载优选与本地扫描支持以下格式：
+
+- `.dmg`, `.pkg`, `.mpkg`, `.app.zip`
+- `.zip`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`
+- `.tar.bz2`, `.tbz2`, `.tar`, `.7z`, `.gz`, `.xz`, `.bz2`
+- `.appimage`, `.deb`, `.rpm`
+
+## 项目结构
+
+- `Package.swift`: Swift Package 定义
+- `Sources/GitHubCollector/GitHubCollectorApp.swift`: App 入口
+- `Sources/GitHubCollector/ContentView.swift`: 主界面与详情页
+- `Sources/GitHubCollector/AppViewModel.swift`: 抓取流程、同步、状态管理
+- `Sources/GitHubCollector/GitHubService.swift`: GitHub API 抓取与资产选择
+- `Sources/GitHubCollector/DownloadService.swift`: 下载安装与进度回调
+- `Sources/GitHubCollector/StorageService.swift`: 本地持久化与目录扫描
 - `Sources/GitHubCollector/TextServices.swift`: 翻译、总结、分类
 - `Sources/GitHubCollector/SettingsStore.swift`: 配置持久化
-- `Sources/GitHubCollector/StorageService.swift`: 自定义路径、目录扫描、简介文件写入
+- `Sources/GitHubCollector/URLParser.swift`: 链接解析
+- `Sources/GitHubCollector/NativeInputField.swift`: 原生输入控件
 
-## 运行
+## 本地运行
 
 ```bash
-cd "/Users/sexyfeifan/Documents/New project/GitHubCollector"
-mkdir -p .build-cache .clang-cache
-SWIFTPM_ENABLE_PLUGINS=0 \
-CLANG_MODULE_CACHE_PATH="$PWD/.clang-cache" \
-swift build
+cd "/Users/sexyfeifan/Documents/New project"
+mkdir -p .clang-cache
+CLANG_MODULE_CACHE_PATH="$PWD/.clang-cache" swift build
 swift run
 ```
 
-如果你的机器出现 Swift SDK / Toolchain 版本不匹配，请在 Xcode 中统一 Command Line Tools 版本，或通过：
+## 打包
+
+### 打包 `.app`
 
 ```bash
-xcode-select -p
-swift --version
+cd "/Users/sexyfeifan/Documents/New project"
+CLANG_MODULE_CACHE_PATH="$PWD/.clang-cache" swift build -c release
 ```
 
-确认工具链与系统 SDK 匹配后重新编译。
+之后将 `./build/release/GitHubCollector` 组装为 `dist/GitHubCollector.app`（项目内已使用该流程）。
 
-## 本地数据
+### 打包 `.dmg`
 
-应用会把下载文件和记录存到：
+项目发布产物：
+
+- `dist/GitHubCollector.app`
+- `dist/GitHubCollector.dmg`
+
+## 数据存储
+
+默认存储到：
 
 - `~/Downloads/GitHubCollector/<分类>/<项目>/...`
 - `~/Downloads/GitHubCollector/records.json`
 
-## 后续增强（建议）
+支持在设置中自定义下载路径，切换后会自动扫描已有文件。
 
-- API Key 存储从 UserDefaults 升级为 Keychain
-- 增加 GitHub Token（避免 API 限速）
-- 增加“仅下载 macOS 资产”严格过滤
+每个项目目录会额外写入：
+
+- `README_COLLECTOR.md`
+- `project_info.json`
+
+## 说明
+
+- 首页输入区在部分系统环境可能存在键盘焦点异常，提供了“输入链接”弹窗作为稳定输入兜底入口。
+- 如需降低 GitHub API 限速影响，建议后续加入 GitHub Token 配置。
