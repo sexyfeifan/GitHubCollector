@@ -96,6 +96,8 @@ struct StorageService {
             summaryZH: draft.summaryZH,
             releaseNotesEN: draft.releaseNotesEN,
             releaseNotesZH: draft.releaseNotesZH,
+            setupGuideEN: draft.setupGuideEN,
+            formattedZH: draft.formattedZH,
             category: draft.category,
             language: draft.language,
             stars: draft.stars,
@@ -250,6 +252,12 @@ struct StorageService {
 
         ## Release Notes (ZH)
         \(record.releaseNotesZH)
+
+        ## Setup Guide (EN)
+        \(record.setupGuideEN)
+
+        ## Formatted (ZH)
+        \(record.formattedZH)
         """
         try content.data(using: .utf8)?.write(to: url, options: .atomic)
     }
@@ -326,6 +334,8 @@ struct StorageService {
                 summaryZH: "检测到本地历史文件：\(fileURL.lastPathComponent)",
                 releaseNotesEN: "",
                 releaseNotesZH: "",
+                setupGuideEN: "",
+                formattedZH: "",
                 category: category,
                 language: "Unknown",
                 stars: 0,

@@ -28,6 +28,7 @@ final class AppViewModel: ObservableObject {
         let name: String
         let url: String
         let reason: String
+        let type: FailedReasonType
     }
 
     enum ImportError: Error, LocalizedError {
@@ -83,6 +84,8 @@ final class AppViewModel: ObservableObject {
     @Published var crawlState: CrawlState = .idle
     @Published var sessionTrafficBytes: Int64 = 0
     @Published var totalTrafficBytes: Int64 = 0
+    @Published var openAIPromptTokens: Int = 0
+    @Published var openAICompletionTokens: Int = 0
     private var downloadLogTick: [String: Date] = [:]
     private var queuedURLs: [String] = []
     private var currentQueueIndex: Int = 0
@@ -96,6 +99,8 @@ final class AppViewModel: ObservableObject {
     private let translator = TranslatorService()
     private let summarizer = SummarizerService()
     private let classifier = ClassifierService()
+    private let setupGuideExtractor = SetupGuideExtractor()
+    private let layoutFormatter = LayoutFormatterService()
     private let downloader = DownloadService()
     private let storage = StorageService()
     private let settings = SettingsStore()
@@ -111,8 +116,30 @@ final class AppViewModel: ObservableObject {
         includeNoPackageProjects = s.includeNoPackageProjects
         loadSettingsFromSelectedDirectoryIfAvailable()
         totalTrafficBytes = settings.loadTotalTrafficBytes()
+        openAIPromptTokens = settings.loadOpenAITotalPromptTokens()
+        openAICompletionTokens = settings.loadOpenAITotalCompletionTokens()
         reloadRecords()
     }
+
+    var appVersionText: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "v\(v) (\(b))"
+    }
+
+    var failed404Projects: [FailedProject] {
+        failedProjects.filter { $0.type == .notFound404 }
+    }
+
+    var failedTimeoutProjects: [FailedProject] {
+        failedProjects.filter { $0.type == .timeout }
+    }
+
+    var failedOtherProjects: [FailedProject] {
+        failedProjects.filter { $0.type == .fetchFailed }
+    }
+
+    var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
 
     var categories: [String] {
         let all = Set(records.map { $0.category })
@@ -421,6 +448,12 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func formatRecordOffline(_ record: RepoRecord) {
+        Task {
+            await runOfflineFormat(record)
+        }
+    }
+
     func deleteRecord(_ record: RepoRecord, deleteFiles: Bool) {
         do {
             try storage.deleteRecord(record, baseDir: activeBaseDir, removeFiles: deleteFiles)
@@ -585,6 +618,16 @@ final class AppViewModel: ObservableObject {
                 queueItems[i].status = .success
                 queueItems[i].detail = skip.errorDescription ?? "已跳过"
                 appendLog(skip.errorDescription ?? "已跳过当前项目。")
+                if case .closedProject = skip {
+                    failedProjects.append(
+                        FailedProject(
+                            name: projectNameFromURL(urls[i]),
+                            url: urls[i],
+                            reason: skip.errorDescription ?? "项目不可用",
+                            type: .notFound404
+                        )
+                    )
+                }
             } catch let skip as ImportError {
                 queueItems[i].status = .success
                 queueItems[i].detail = skip.errorDescription ?? "已跳过"
@@ -597,7 +640,8 @@ final class AppViewModel: ObservableObject {
                     FailedProject(
                         name: projectNameFromURL(urls[i]),
                         url: urls[i],
-                        reason: error.localizedDescription
+                        reason: error.localizedDescription,
+                        type: classifyFailureType(error.localizedDescription)
                     )
                 )
                 appendLog("抓取失败：\(urls[i])，原因：\(error.localizedDescription)")
@@ -697,10 +741,15 @@ final class AppViewModel: ObservableObject {
         let cleanReadme = cleanReadmeContent(fetchedReadme)
         let englishDescription = mergedDescription(repo: fetchedRepo, readme: cleanReadme)
         let releaseNotesEN = cleanReadmeContent(fetchedRelease?.body ?? "")
+        let setupGuideEN = setupGuideExtractor.extract(from: fetchedReadme)
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        let chineseDescription = await translator.translateToChinese(englishDescription, config: config)
-        let chineseReleaseNotes = await translator.translateToChinese(releaseNotesEN, config: config)
+        let descResult = await translator.translateToChineseDetailed(englishDescription, config: config)
+        let noteResult = await translator.translateToChineseDetailed(releaseNotesEN, config: config)
+        let chineseDescription = descResult.text
+        let chineseReleaseNotes = noteResult.text
+        addOpenAIUsage(descResult.usage)
+        addOpenAIUsage(noteResult.usage)
 
         let summary = summarizer.summarize(
             chineseDescription.isEmpty ? englishDescription : chineseDescription,
@@ -771,6 +820,8 @@ final class AppViewModel: ObservableObject {
             summaryZH: summary,
             releaseNotesEN: releaseNotesEN,
             releaseNotesZH: chineseReleaseNotes,
+            setupGuideEN: setupGuideEN,
+            formattedZH: "",
             category: category,
             language: fetchedRepo.language ?? "Unknown",
             stars: fetchedRepo.stargazersCount,
@@ -870,8 +921,12 @@ final class AppViewModel: ObservableObject {
 
         statusMessage = "正在重新翻译：\(record.projectName)"
         var updated = record
-        updated.descriptionZH = await translator.translateToChinese(record.descriptionEN, config: config)
-        updated.releaseNotesZH = await translator.translateToChinese(record.releaseNotesEN, config: config)
+        let descResult = await translator.translateToChineseDetailed(record.descriptionEN, config: config)
+        let noteResult = await translator.translateToChineseDetailed(record.releaseNotesEN, config: config)
+        updated.descriptionZH = descResult.text
+        updated.releaseNotesZH = noteResult.text
+        addOpenAIUsage(descResult.usage)
+        addOpenAIUsage(noteResult.usage)
         updated.summaryZH = summarizer.summarize(updated.descriptionZH, fallbackTitle: record.projectName)
         updated.updatedAt = Date()
 
@@ -881,6 +936,37 @@ final class AppViewModel: ObservableObject {
             statusMessage = "已完成重新翻译：\(record.projectName)"
         } catch {
             errorMessage = "保存翻译结果失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func runOfflineFormat(_ record: RepoRecord) async {
+        isLoading = true
+        defer { isLoading = false }
+
+        let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
+        if !config.isEnabled {
+            errorMessage = "请先在设置中填写 OpenAI API Key。"
+            return
+        }
+
+        statusMessage = "正在离线排版：\(record.projectName)"
+        var updated = record
+        let formatted = await layoutFormatter.formatChineseContent(
+            title: record.projectName,
+            descriptionZH: record.descriptionZH,
+            releaseNotesZH: record.releaseNotesZH,
+            config: config
+        )
+        updated.formattedZH = formatted.text
+        addOpenAIUsage(formatted.usage)
+        updated.updatedAt = Date()
+
+        do {
+            try storage.saveRecord(updated, baseDir: activeBaseDir)
+            reloadRecords()
+            statusMessage = "离线排版完成：\(record.projectName)"
+        } catch {
+            errorMessage = "保存离线排版结果失败：\(error.localizedDescription)"
         }
     }
 
@@ -979,6 +1065,26 @@ final class AppViewModel: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: date)
+    }
+
+    private func classifyFailureType(_ reason: String) -> FailedReasonType {
+        let lower = reason.lowercased()
+        if lower.contains("404") || lower.contains("不存在") || lower.contains("repoUnavailable".lowercased()) {
+            return .notFound404
+        }
+        if lower.contains("timed out") || lower.contains("超时") || lower.contains("cannot connect") || lower.contains("network connection") {
+            return .timeout
+        }
+        return .fetchFailed
+    }
+
+    private func addOpenAIUsage(_ usage: OpenAIUsage?) {
+        guard let usage else { return }
+        openAIPromptTokens += usage.promptTokens
+        openAICompletionTokens += usage.completionTokens
+        settings.saveOpenAITokens(prompt: openAIPromptTokens, completion: openAICompletionTokens)
+        saveSettingsToCurrentDirectory(currentSettings())
+        appendLog("OpenAI Token: +\(usage.totalTokens)（累计 \(openAITotalTokens)）")
     }
 
     private func appendLog(_ message: String) {

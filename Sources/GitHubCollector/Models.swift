@@ -1,5 +1,11 @@
 import Foundation
 
+enum FailedReasonType: String, Codable, CaseIterable {
+    case notFound404 = "404/不可用"
+    case timeout = "超时"
+    case fetchFailed = "抓取失败"
+}
+
 struct RepoIdentity: Hashable {
     let owner: String
     let name: String
@@ -74,6 +80,8 @@ struct RepoRecord: Codable, Identifiable {
 
     var releaseNotesEN: String
     var releaseNotesZH: String
+    var setupGuideEN: String
+    var formattedZH: String
 
     var category: String
     var language: String
@@ -104,6 +112,8 @@ struct RepoRecord: Codable, Identifiable {
         summaryZH: String,
         releaseNotesEN: String,
         releaseNotesZH: String,
+        setupGuideEN: String,
+        formattedZH: String,
         category: String,
         language: String,
         stars: Int,
@@ -127,6 +137,8 @@ struct RepoRecord: Codable, Identifiable {
         self.summaryZH = summaryZH
         self.releaseNotesEN = releaseNotesEN
         self.releaseNotesZH = releaseNotesZH
+        self.setupGuideEN = setupGuideEN
+        self.formattedZH = formattedZH
         self.category = category
         self.language = language
         self.stars = stars
@@ -144,7 +156,7 @@ struct RepoRecord: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, owner, repo, projectName, sourceURL
         case descriptionEN, descriptionZH, summaryZH
-        case releaseNotesEN, releaseNotesZH
+        case releaseNotesEN, releaseNotesZH, setupGuideEN, formattedZH
         case category, language, stars
         case releaseTag, releaseAssetName, releaseAssetURL
         case hasDownloadAsset, localPath, previewImagePath, storageRootPath, infoFilePath
@@ -166,6 +178,8 @@ struct RepoRecord: Codable, Identifiable {
 
         releaseNotesEN = try c.decodeIfPresent(String.self, forKey: .releaseNotesEN) ?? ""
         releaseNotesZH = try c.decodeIfPresent(String.self, forKey: .releaseNotesZH) ?? ""
+        setupGuideEN = try c.decodeIfPresent(String.self, forKey: .setupGuideEN) ?? ""
+        formattedZH = try c.decodeIfPresent(String.self, forKey: .formattedZH) ?? ""
 
         category = try c.decodeIfPresent(String.self, forKey: .category) ?? "未分类"
         language = try c.decodeIfPresent(String.self, forKey: .language) ?? "Unknown"
@@ -196,6 +210,8 @@ struct RepoDraft {
 
     let releaseNotesEN: String
     let releaseNotesZH: String
+    let setupGuideEN: String
+    let formattedZH: String
 
     let category: String
     let language: String

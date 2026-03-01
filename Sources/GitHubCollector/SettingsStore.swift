@@ -18,6 +18,8 @@ struct SettingsStore {
         var openAIModel: String
         var retryCount: Int
         var includeNoPackageProjects: Bool
+        var openAITotalPromptTokens: Int?
+        var openAITotalCompletionTokens: Int?
     }
 
     private enum Keys {
@@ -29,6 +31,8 @@ struct SettingsStore {
         static let downloadRootPath = "settings.download.root_path"
         static let includeNoPackageProjects = "settings.include_no_package_projects"
         static let totalTrafficBytes = "metrics.total_traffic_bytes"
+        static let openAITotalPromptTokens = "metrics.openai.prompt_tokens"
+        static let openAITotalCompletionTokens = "metrics.openai.completion_tokens"
     }
 
     private let ud = UserDefaults.standard
@@ -69,7 +73,9 @@ struct SettingsStore {
             openAIBaseURL: settings.openAIBaseURL,
             openAIModel: settings.openAIModel,
             retryCount: max(1, min(settings.retryCount, 5)),
-            includeNoPackageProjects: settings.includeNoPackageProjects
+            includeNoPackageProjects: settings.includeNoPackageProjects,
+            openAITotalPromptTokens: loadOpenAITotalPromptTokens(),
+            openAITotalCompletionTokens: loadOpenAITotalCompletionTokens()
         )
         let data = try makePrettyEncoder().encode(payload)
         try data.write(to: settingsFileURL(baseDir: baseDir), options: .atomic)
@@ -81,6 +87,10 @@ struct SettingsStore {
         do {
             let data = try Data(contentsOf: file)
             let payload = try JSONDecoder().decode(DiskSettings.self, from: data)
+            saveOpenAITokens(
+                prompt: payload.openAITotalPromptTokens ?? 0,
+                completion: payload.openAITotalCompletionTokens ?? 0
+            )
             return AppSettings(
                 githubToken: payload.githubToken,
                 openAIKey: payload.openAIKey,
@@ -111,5 +121,18 @@ struct SettingsStore {
 
     func saveTotalTrafficBytes(_ bytes: Int64) {
         ud.set(Int(bytes), forKey: Keys.totalTrafficBytes)
+    }
+
+    func loadOpenAITotalPromptTokens() -> Int {
+        ud.integer(forKey: Keys.openAITotalPromptTokens)
+    }
+
+    func loadOpenAITotalCompletionTokens() -> Int {
+        ud.integer(forKey: Keys.openAITotalCompletionTokens)
+    }
+
+    func saveOpenAITokens(prompt: Int, completion: Int) {
+        ud.set(max(0, prompt), forKey: Keys.openAITotalPromptTokens)
+        ud.set(max(0, completion), forKey: Keys.openAITotalCompletionTokens)
     }
 }

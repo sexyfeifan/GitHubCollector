@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var detailRecord: RepoRecord?
     @State private var showSettingsDrawer = false
     @State private var showLogSheet = false
+    @State private var showFailureSheet = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 340), spacing: 16)
@@ -81,9 +82,18 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing))
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            Text(vm.appVersionText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+        }
         .sheet(item: $detailRecord) { record in
             RepoDetailView(record: record) {
                 detailRecord = nil
+            } formatOffline: {
+                vm.formatRecordOffline(record)
             }
             .frame(minWidth: 820, minHeight: 620)
         }
@@ -92,6 +102,18 @@ struct ContentView: View {
                 showLogSheet = false
             }
             .frame(minWidth: 920, minHeight: 620)
+        }
+        .sheet(isPresented: $showFailureSheet) {
+            FailureHubView(
+                all: vm.failedProjects,
+                notFound: vm.failed404Projects,
+                timeout: vm.failedTimeoutProjects,
+                other: vm.failedOtherProjects,
+                openURL: vm.openGitHubURL
+            ) {
+                showFailureSheet = false
+            }
+            .frame(minWidth: 880, minHeight: 620)
         }
         .onChange(of: vm.searchQuery) { _ in
             vm.resetPageToFirst()
@@ -193,6 +215,7 @@ struct ContentView: View {
                             ForEach(Array(vm.realtimeLogs.suffix(80).enumerated()), id: \.offset) { _, line in
                                 Text(line)
                                     .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(logColor(line))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -293,6 +316,16 @@ struct ContentView: View {
                             .stroke(Color.gray.opacity(0.35), lineWidth: 1)
                             .allowsHitTesting(false)
                     )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("OpenAI Token 统计")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Prompt: \(vm.openAIPromptTokens)  Completion: \(vm.openAICompletionTokens)  Total: \(vm.openAITotalTokens)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
 
             Divider()
@@ -404,6 +437,17 @@ struct ContentView: View {
 
             if !vm.failedProjects.isEmpty {
                 GroupBox("失败项目汇总（可跳转检查）") {
+                    HStack {
+                        Text("404: \(vm.failed404Projects.count)  超时: \(vm.failedTimeoutProjects.count)  其他: \(vm.failedOtherProjects.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("打开失败分拣页") {
+                            showFailureSheet = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.bottom, 4)
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
                             ForEach(vm.failedProjects) { item in
@@ -423,7 +467,7 @@ struct ContentView: View {
                                     .lineLimit(1)
                                 Text(item.reason)
                                     .font(.caption2)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(failureColor(item.type))
                                     .lineLimit(1)
                                 Divider()
                             }
@@ -433,6 +477,34 @@ struct ContentView: View {
                     .frame(height: 120)
                 }
             }
+        }
+    }
+
+    private func logColor(_ line: String) -> Color {
+        let lower = line.lowercased()
+        if lower.contains("404") || lower.contains("不存在") {
+            return .orange
+        }
+        if lower.contains("超时") || lower.contains("timed out") {
+            return .pink
+        }
+        if lower.contains("失败") || lower.contains("异常") || lower.contains("error") {
+            return .red
+        }
+        if lower.contains("跳过") {
+            return .yellow
+        }
+        if lower.contains("下载中") || lower.contains("下载链接") {
+            return .blue
+        }
+        return .secondary
+    }
+
+    private func failureColor(_ type: FailedReasonType) -> Color {
+        switch type {
+        case .notFound404: return .orange
+        case .timeout: return .pink
+        case .fetchFailed: return .red
         }
     }
 }
@@ -536,7 +608,10 @@ private struct RepoCard: View {
 private struct RepoDetailView: View {
     let record: RepoRecord
     let onClose: () -> Void
+    let formatOffline: () -> Void
     @State private var renderMarkdown = true
+    @State private var showENDescription = false
+    @State private var showENReleaseNotes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -553,6 +628,10 @@ private struct RepoDetailView: View {
                     Text("版本：\(record.releaseTag)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button("离线排版") {
+                        formatOffline()
+                    }
+                    .buttonStyle(.bordered)
                     Button("关闭") {
                         onClose()
                     }
@@ -599,20 +678,38 @@ private struct RepoDetailView: View {
                         renderMarkdown: renderMarkdown
                     )
                     section(
-                        "Description (EN)",
-                        record.descriptionEN.isEmpty ? "No description" : record.descriptionEN,
-                        renderMarkdown: renderMarkdown
-                    )
-                    section(
                         "更新说明（中文）",
                         record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
                         renderMarkdown: renderMarkdown
                     )
-                    section(
-                        "Release Notes (EN)",
-                        record.releaseNotesEN.isEmpty ? "No release notes" : record.releaseNotesEN,
-                        renderMarkdown: renderMarkdown
-                    )
+                    if !record.formattedZH.isEmpty {
+                        section(
+                            "离线排版（中文）",
+                            record.formattedZH,
+                            renderMarkdown: renderMarkdown
+                        )
+                    }
+                    if !record.setupGuideEN.isEmpty {
+                        section(
+                            "搭建教程（Docker/Compose）",
+                            record.setupGuideEN,
+                            renderMarkdown: true
+                        )
+                    }
+                    DisclosureGroup("Description (EN)", isExpanded: $showENDescription) {
+                        section(
+                            "Description (EN)",
+                            record.descriptionEN.isEmpty ? "No description" : record.descriptionEN,
+                            renderMarkdown: renderMarkdown
+                        )
+                    }
+                    DisclosureGroup("Release Notes (EN)", isExpanded: $showENReleaseNotes) {
+                        section(
+                            "Release Notes (EN)",
+                            record.releaseNotesEN.isEmpty ? "No release notes" : record.releaseNotesEN,
+                            renderMarkdown: renderMarkdown
+                        )
+                    }
                 }
                 .padding(.top, 6)
             }
@@ -628,7 +725,7 @@ private struct RepoDetailView: View {
 
             if renderMarkdown {
                 StyledMarkdownView(markdown: text)
-                    .frame(height: 280)
+                    .frame(height: 240)
             } else {
                 ScrollView(.horizontal) {
                     Text(text)
@@ -675,6 +772,7 @@ private struct LogDetailView: View {
                     ForEach(Array(logs.enumerated()), id: \.offset) { _, line in
                         Text(line)
                             .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(logColor(line))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
@@ -685,6 +783,93 @@ private struct LogDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .padding(16)
+    }
+
+    private func logColor(_ line: String) -> Color {
+        let lower = line.lowercased()
+        if lower.contains("404") || lower.contains("不存在") {
+            return .orange
+        }
+        if lower.contains("超时") || lower.contains("timed out") {
+            return .pink
+        }
+        if lower.contains("失败") || lower.contains("异常") || lower.contains("error") {
+            return .red
+        }
+        if lower.contains("下载中") || lower.contains("下载链接") {
+            return .blue
+        }
+        return .secondary
+    }
+}
+
+private struct FailureHubView: View {
+    let all: [AppViewModel.FailedProject]
+    let notFound: [AppViewModel.FailedProject]
+    let timeout: [AppViewModel.FailedProject]
+    let other: [AppViewModel.FailedProject]
+    let openURL: (String) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("失败项目分拣")
+                    .font(.title3).bold()
+                Spacer()
+                Button("关闭") { onClose() }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            Text("总计 \(all.count) 项；404 \(notFound.count) 项；超时 \(timeout.count) 项；其他 \(other.count) 项")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            GroupBox("404 / 项目不可用") {
+                failureList(notFound)
+            }
+            GroupBox("超时项目") {
+                failureList(timeout)
+            }
+            GroupBox("其他抓取失败") {
+                failureList(other)
+            }
+        }
+        .padding(16)
+    }
+
+    private func failureList(_ items: [AppViewModel.FailedProject]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 6) {
+                if items.isEmpty {
+                    Text("暂无")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(items) { item in
+                    HStack {
+                        Text(item.name)
+                            .font(.caption)
+                        Spacer()
+                        Button("打开 GitHub") {
+                            openURL(item.url)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Text(item.url)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(item.reason)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                    Divider()
+                }
+            }
+            .padding(4)
+        }
+        .frame(height: 150)
     }
 }
 
