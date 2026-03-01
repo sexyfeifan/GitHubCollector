@@ -8,6 +8,7 @@ struct AppSettings {
     var retryCount: Int = 2
     var downloadRootPath: String = ""
     var includeNoPackageProjects: Bool = true
+    var categoryModeRaw: String = "packageOnly"
 }
 
 struct SettingsStore {
@@ -18,6 +19,7 @@ struct SettingsStore {
         var openAIModel: String
         var retryCount: Int
         var includeNoPackageProjects: Bool
+        var categoryModeRaw: String?
         var openAITotalPromptTokens: Int?
         var openAITotalCompletionTokens: Int?
     }
@@ -30,6 +32,7 @@ struct SettingsStore {
         static let retryCount = "settings.retry_count"
         static let downloadRootPath = "settings.download.root_path"
         static let includeNoPackageProjects = "settings.include_no_package_projects"
+        static let categoryModeRaw = "settings.category_mode_raw"
         static let totalTrafficBytes = "metrics.total_traffic_bytes"
         static let openAITotalPromptTokens = "metrics.openai.prompt_tokens"
         static let openAITotalCompletionTokens = "metrics.openai.completion_tokens"
@@ -52,6 +55,7 @@ struct SettingsStore {
         } else {
             s.includeNoPackageProjects = ud.bool(forKey: Keys.includeNoPackageProjects)
         }
+        s.categoryModeRaw = ud.string(forKey: Keys.categoryModeRaw) ?? "packageOnly"
         return s
     }
 
@@ -63,6 +67,7 @@ struct SettingsStore {
         ud.set(max(1, min(settings.retryCount, 5)), forKey: Keys.retryCount)
         ud.set(settings.downloadRootPath, forKey: Keys.downloadRootPath)
         ud.set(settings.includeNoPackageProjects, forKey: Keys.includeNoPackageProjects)
+        ud.set(settings.categoryModeRaw, forKey: Keys.categoryModeRaw)
     }
 
     func saveToDirectory(_ settings: AppSettings, baseDir: URL) throws {
@@ -74,6 +79,7 @@ struct SettingsStore {
             openAIModel: settings.openAIModel,
             retryCount: max(1, min(settings.retryCount, 5)),
             includeNoPackageProjects: settings.includeNoPackageProjects,
+            categoryModeRaw: settings.categoryModeRaw,
             openAITotalPromptTokens: loadOpenAITotalPromptTokens(),
             openAITotalCompletionTokens: loadOpenAITotalCompletionTokens()
         )
@@ -98,7 +104,8 @@ struct SettingsStore {
                 openAIModel: payload.openAIModel,
                 retryCount: max(1, min(payload.retryCount, 5)),
                 downloadRootPath: baseDir.path,
-                includeNoPackageProjects: payload.includeNoPackageProjects
+                includeNoPackageProjects: payload.includeNoPackageProjects,
+                categoryModeRaw: payload.categoryModeRaw ?? "packageOnly"
             )
         } catch {
             return nil

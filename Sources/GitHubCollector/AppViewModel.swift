@@ -3,6 +3,18 @@ import Foundation
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    enum CategoryMode: String, CaseIterable {
+        case packageOnly
+        case typeBased
+
+        var title: String {
+            switch self {
+            case .packageOnly: return "按安装包"
+            case .typeBased: return "按项目类型"
+            }
+        }
+    }
+
     enum CrawlState {
         case idle
         case running
@@ -75,6 +87,7 @@ final class AppViewModel: ObservableObject {
     @Published var retryCount: Int = 2
     @Published var downloadRootPath: String = ""
     @Published var includeNoPackageProjects: Bool = true
+    @Published var categoryMode: CategoryMode = .packageOnly
 
     @Published var queueItems: [QueueItem] = []
     @Published var failedURLs: [String] = []
@@ -98,6 +111,7 @@ final class AppViewModel: ObservableObject {
     private let github = GitHubService()
     private let translator = TranslatorService()
     private let summarizer = SummarizerService()
+    private let classifier = ClassifierService()
     private let setupGuideExtractor = SetupGuideExtractor()
     private let layoutFormatter = LayoutFormatterService()
     private let downloader = DownloadService()
@@ -113,6 +127,7 @@ final class AppViewModel: ObservableObject {
         retryCount = s.retryCount
         downloadRootPath = s.downloadRootPath
         includeNoPackageProjects = s.includeNoPackageProjects
+        categoryMode = CategoryMode(rawValue: s.categoryModeRaw) ?? .packageOnly
         loadSettingsFromSelectedDirectoryIfAvailable()
         totalTrafficBytes = settings.loadTotalTrafficBytes()
         openAIPromptTokens = settings.loadOpenAITotalPromptTokens()
@@ -141,8 +156,12 @@ final class AppViewModel: ObservableObject {
     var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
 
     var categories: [String] {
-        let all = Set(records.map { $0.displayCategory })
-        return ["全部", "有安装包项目", "无安装包项目"].filter { $0 == "全部" || all.contains($0) }
+        if categoryMode == .packageOnly {
+            let all = Set(records.map { $0.displayCategory })
+            return ["全部", "有安装包项目", "无安装包项目"].filter { $0 == "全部" || all.contains($0) }
+        }
+        let all = Set(records.map { $0.category })
+        return ["全部"] + all.sorted()
     }
 
     var filteredRecords: [RepoRecord] {
@@ -150,7 +169,7 @@ final class AppViewModel: ObservableObject {
         if selectedCategory == "全部" {
             categoryFiltered = records
         } else {
-            categoryFiltered = records.filter { $0.displayCategory == selectedCategory }
+            categoryFiltered = records.filter { categoryLabel(for: $0) == selectedCategory }
         }
 
         let key = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -158,8 +177,18 @@ final class AppViewModel: ObservableObject {
         return categoryFiltered.filter { r in
             r.projectName.lowercased().contains(key) ||
             r.fullName.lowercased().contains(key) ||
-            r.displayCategory.lowercased().contains(key) ||
+            categoryLabel(for: r).lowercased().contains(key) ||
             r.summaryZH.lowercased().contains(key)
+        }
+    }
+
+    func categoryLabel(for record: RepoRecord) -> String {
+        categoryMode == .packageOnly ? record.displayCategory : record.category
+    }
+
+    func ensureValidCategorySelection() {
+        if !categories.contains(selectedCategory) {
+            selectedCategory = "全部"
         }
     }
 
@@ -468,6 +497,7 @@ final class AppViewModel: ObservableObject {
             let records = try storage.loadRecords(baseDir: activeBaseDir)
             self.records = records
             self.knownRecordIDs = Set(records.map { $0.id })
+            ensureValidCategorySelection()
             ensureValidPage()
         } catch {
             errorMessage = "读取本地记录失败: \(error.localizedDescription)"
@@ -492,7 +522,8 @@ final class AppViewModel: ObservableObject {
             openAIModel: openAIModel,
             retryCount: retryCount,
             downloadRootPath: downloadRootPath,
-            includeNoPackageProjects: includeNoPackageProjects
+            includeNoPackageProjects: includeNoPackageProjects,
+            categoryModeRaw: categoryMode.rawValue
         )
     }
 
@@ -512,6 +543,7 @@ final class AppViewModel: ObservableObject {
             openAIModel = disk.openAIModel
             retryCount = disk.retryCount
             includeNoPackageProjects = disk.includeNoPackageProjects
+            categoryMode = CategoryMode(rawValue: disk.categoryModeRaw) ?? .packageOnly
             appendLog("已从下载目录加载设置。")
         }
     }
@@ -767,7 +799,11 @@ final class AppViewModel: ObservableObject {
         let previewImagePath: String
 
         if let asset = selectedAsset {
-            category = "有安装包项目"
+            if categoryMode == .packageOnly {
+                category = "有安装包项目"
+            } else {
+                category = classifier.classify(repo: fetchedRepo, text: englishDescription)
+            }
             releaseTag = resolveVersion(from: asset.name, fallback: fetchedRelease?.tagName ?? "N/A")
             releaseAssetName = asset.name
             releaseAssetURL = asset.browserDownloadURL.absoluteString

@@ -44,6 +44,7 @@ struct ContentView: View {
                         ForEach(vm.pagedRecords) { record in
                             RepoCard(
                                 record: record,
+                                categoryText: vm.categoryLabel(for: record),
                                 openFolder: { vm.openInFinder(record) },
                                 openInstaller: { vm.openInstaller(record) },
                                 openSource: { vm.openSourcePage(record) },
@@ -90,7 +91,7 @@ struct ContentView: View {
                 .padding(.vertical, 6)
         }
         .sheet(item: $detailRecord) { record in
-            RepoDetailView(record: record) {
+            RepoDetailView(record: record, categoryText: vm.categoryLabel(for: record)) {
                 detailRecord = nil
             } formatOffline: {
                 vm.formatRecordOffline(record)
@@ -123,6 +124,10 @@ struct ContentView: View {
         }
         .onChange(of: vm.records.count) { _ in
             vm.ensureValidPage()
+        }
+        .onChange(of: vm.categoryMode) { _ in
+            vm.ensureValidCategorySelection()
+            vm.resetPageToFirst()
         }
         .animation(.easeInOut(duration: 0.2), value: showSettingsDrawer)
     }
@@ -343,6 +348,18 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("项目分类模式")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("项目分类模式", selection: $vm.categoryMode) {
+                    ForEach(AppViewModel.CategoryMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("软件下载路径")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -519,6 +536,7 @@ private func formatBytes(_ bytes: Int64) -> String {
 
 private struct RepoCard: View {
     let record: RepoRecord
+    let categoryText: String
     let openFolder: () -> Void
     let openInstaller: () -> Void
     let openSource: () -> Void
@@ -555,7 +573,7 @@ private struct RepoCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
-                Label(record.displayCategory, systemImage: "square.grid.2x2")
+                Label(categoryText, systemImage: "square.grid.2x2")
                 Label("★ \(record.stars)", systemImage: "star")
                 Label(record.language, systemImage: "curlybraces")
             }
@@ -594,19 +612,21 @@ private struct RepoCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer(minLength: 0)
         }
         .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 420, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(NSColor.windowBackgroundColor))
                 .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
         )
-        .frame(height: 420, alignment: .top)
     }
 }
 
 private struct RepoDetailView: View {
     let record: RepoRecord
+    let categoryText: String
     let onClose: () -> Void
     let formatOffline: () -> Void
     @State private var renderMarkdown = true
@@ -643,7 +663,7 @@ private struct RepoDetailView: View {
             }
 
             HStack(spacing: 14) {
-                Label(record.displayCategory, systemImage: "square.grid.2x2")
+                Label(categoryText, systemImage: "square.grid.2x2")
                 Label("★ \(record.stars)", systemImage: "star")
                 Label(record.language, systemImage: "curlybraces")
             }
