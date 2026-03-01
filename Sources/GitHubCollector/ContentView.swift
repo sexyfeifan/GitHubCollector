@@ -95,7 +95,7 @@ struct ContentView: View {
             } formatOffline: {
                 vm.formatRecordOffline(record)
             }
-            .frame(minWidth: 820, minHeight: 620)
+            .frame(minWidth: 1040, minHeight: 760)
         }
         .sheet(isPresented: $showLogSheet) {
             LogDetailView(logs: vm.realtimeLogs) {
@@ -548,16 +548,14 @@ private struct RepoCard: View {
                 .font(.subheadline)
                 .lineLimit(2)
 
-            if !record.previewImagePath.isEmpty {
-                LocalPreviewImage(path: record.previewImagePath)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 120)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
+            LocalPreviewImage(path: record.previewImagePath)
+                .frame(maxWidth: .infinity)
+                .frame(height: 120)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
-                Label(record.category, systemImage: "square.grid.2x2")
+                Label(record.displayCategory, systemImage: "square.grid.2x2")
                 Label("★ \(record.stars)", systemImage: "star")
                 Label(record.language, systemImage: "curlybraces")
             }
@@ -603,6 +601,7 @@ private struct RepoCard: View {
                 .fill(Color(NSColor.windowBackgroundColor))
                 .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
         )
+        .frame(height: 420, alignment: .top)
     }
 }
 
@@ -611,6 +610,9 @@ private struct RepoDetailView: View {
     let onClose: () -> Void
     let formatOffline: () -> Void
     @State private var renderMarkdown = true
+    @State private var showZHReleaseNotes = false
+    @State private var showFormattedZH = false
+    @State private var showSetupGuide = false
     @State private var showENDescription = false
     @State private var showENReleaseNotes = false
 
@@ -641,7 +643,7 @@ private struct RepoDetailView: View {
             }
 
             HStack(spacing: 14) {
-                Label(record.category, systemImage: "square.grid.2x2")
+                Label(record.displayCategory, systemImage: "square.grid.2x2")
                 Label("★ \(record.stars)", systemImage: "star")
                 Label(record.language, systemImage: "curlybraces")
             }
@@ -677,26 +679,33 @@ private struct RepoDetailView: View {
                     section(
                         "简介（中文）",
                         record.descriptionZH.isEmpty ? "暂无中文简介" : record.descriptionZH,
-                        renderMarkdown: renderMarkdown
+                        renderMarkdown: renderMarkdown,
+                        height: 360
                     )
-                    section(
-                        "更新说明（中文）",
-                        record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
-                        renderMarkdown: renderMarkdown
-                    )
-                    if !record.formattedZH.isEmpty {
+                    DisclosureGroup("更新说明（中文）", isExpanded: $showZHReleaseNotes) {
                         section(
-                            "离线排版（中文）",
-                            record.formattedZH,
+                            "更新说明（中文）",
+                            record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
                             renderMarkdown: renderMarkdown
                         )
                     }
+                    if !record.formattedZH.isEmpty {
+                        DisclosureGroup("离线排版（中文）", isExpanded: $showFormattedZH) {
+                            section(
+                                "离线排版（中文）",
+                                record.formattedZH,
+                                renderMarkdown: renderMarkdown
+                            )
+                        }
+                    }
                     if !record.setupGuideEN.isEmpty {
-                        section(
-                            "搭建教程（Docker/Compose）",
-                            record.setupGuideEN,
-                            renderMarkdown: true
-                        )
+                        DisclosureGroup("搭建教程（Docker/Compose）", isExpanded: $showSetupGuide) {
+                            section(
+                                "搭建教程（Docker/Compose）",
+                                record.setupGuideEN,
+                                renderMarkdown: true
+                            )
+                        }
                     }
                     DisclosureGroup("Description (EN)", isExpanded: $showENDescription) {
                         section(
@@ -719,7 +728,7 @@ private struct RepoDetailView: View {
         .padding(16)
     }
 
-    private func section(_ title: String, _ text: String, renderMarkdown: Bool) -> some View {
+    private func section(_ title: String, _ text: String, renderMarkdown: Bool, height: CGFloat = 220) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
@@ -727,7 +736,7 @@ private struct RepoDetailView: View {
 
             if renderMarkdown {
                 StyledMarkdownView(markdown: text)
-                    .frame(height: 240)
+                    .frame(height: height)
             } else {
                 ScrollView(.horizontal) {
                     Text(text)
@@ -735,6 +744,7 @@ private struct RepoDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
+                .frame(minHeight: height)
             }
             Divider()
         }

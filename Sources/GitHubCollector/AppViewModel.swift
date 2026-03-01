@@ -98,7 +98,6 @@ final class AppViewModel: ObservableObject {
     private let github = GitHubService()
     private let translator = TranslatorService()
     private let summarizer = SummarizerService()
-    private let classifier = ClassifierService()
     private let setupGuideExtractor = SetupGuideExtractor()
     private let layoutFormatter = LayoutFormatterService()
     private let downloader = DownloadService()
@@ -142,8 +141,8 @@ final class AppViewModel: ObservableObject {
     var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
 
     var categories: [String] {
-        let all = Set(records.map { $0.category })
-        return ["全部"] + all.sorted()
+        let all = Set(records.map { $0.displayCategory })
+        return ["全部", "有安装包项目", "无安装包项目"].filter { $0 == "全部" || all.contains($0) }
     }
 
     var filteredRecords: [RepoRecord] {
@@ -151,7 +150,7 @@ final class AppViewModel: ObservableObject {
         if selectedCategory == "全部" {
             categoryFiltered = records
         } else {
-            categoryFiltered = records.filter { $0.category == selectedCategory }
+            categoryFiltered = records.filter { $0.displayCategory == selectedCategory }
         }
 
         let key = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -159,7 +158,7 @@ final class AppViewModel: ObservableObject {
         return categoryFiltered.filter { r in
             r.projectName.lowercased().contains(key) ||
             r.fullName.lowercased().contains(key) ||
-            r.category.lowercased().contains(key) ||
+            r.displayCategory.lowercased().contains(key) ||
             r.summaryZH.lowercased().contains(key)
         }
     }
@@ -768,7 +767,7 @@ final class AppViewModel: ObservableObject {
         let previewImagePath: String
 
         if let asset = selectedAsset {
-            category = classifier.classify(repo: fetchedRepo, text: englishDescription)
+            category = "有安装包项目"
             releaseTag = resolveVersion(from: asset.name, fallback: fetchedRelease?.tagName ?? "N/A")
             releaseAssetName = asset.name
             releaseAssetURL = asset.browserDownloadURL.absoluteString

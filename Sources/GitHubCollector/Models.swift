@@ -100,6 +100,7 @@ struct RepoRecord: Codable, Identifiable {
     var updatedAt: Date
 
     var fullName: String { "\(owner)/\(repo)" }
+    var displayCategory: String { hasDownloadAsset ? "有安装包项目" : "无安装包项目" }
 
     init(
         id: String,
