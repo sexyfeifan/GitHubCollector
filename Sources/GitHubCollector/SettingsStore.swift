@@ -17,6 +17,7 @@ struct SettingsStore {
         static let retryCount = "settings.retry_count"
         static let downloadRootPath = "settings.download.root_path"
         static let includeNoPackageProjects = "settings.include_no_package_projects"
+        static let totalTrafficBytes = "metrics.total_traffic_bytes"
     }
 
     private let ud = UserDefaults.standard
@@ -44,5 +45,13 @@ struct SettingsStore {
         ud.set(max(1, min(settings.retryCount, 5)), forKey: Keys.retryCount)
         ud.set(settings.downloadRootPath, forKey: Keys.downloadRootPath)
         ud.set(settings.includeNoPackageProjects, forKey: Keys.includeNoPackageProjects)
+    }
+
+    func loadTotalTrafficBytes() -> Int64 {
+        Int64(ud.object(forKey: Keys.totalTrafficBytes) as? Int ?? 0)
+    }
+
+    func saveTotalTrafficBytes(_ bytes: Int64) {
+        ud.set(Int(bytes), forKey: Keys.totalTrafficBytes)
     }
 }

@@ -63,6 +63,8 @@ final class AppViewModel: ObservableObject {
     @Published var fetchPrecision: Double = 0
     @Published var realtimeLogs: [String] = []
     @Published var crawlState: CrawlState = .idle
+    @Published var sessionTrafficBytes: Int64 = 0
+    @Published var totalTrafficBytes: Int64 = 0
     private var downloadLogTick: [String: Date] = [:]
     private var queuedURLs: [String] = []
     private var currentQueueIndex: Int = 0
@@ -86,6 +88,7 @@ final class AppViewModel: ObservableObject {
         retryCount = s.retryCount
         downloadRootPath = s.downloadRootPath
         includeNoPackageProjects = s.includeNoPackageProjects
+        totalTrafficBytes = settings.loadTotalTrafficBytes()
         reloadRecords()
     }
 
@@ -418,6 +421,7 @@ final class AppViewModel: ObservableObject {
         errorMessage = ""
         statusMessage = "准备处理 \(urls.count) 个链接..."
         fetchPrecision = 0
+        sessionTrafficBytes = 0
         downloadLogTick.removeAll()
         failedURLs = []
         failedProjects = []
@@ -593,6 +597,7 @@ final class AppViewModel: ObservableObject {
             hasDownloadAsset = true
             localPath = downloaded.path
             appendLog("已下载：\(asset.name)")
+            addTrafficFromFile(path: downloaded.path)
         } else {
             guard includeNoPackageProjects else {
                 throw ImportError.noDownloadAssetSkipped
@@ -610,6 +615,7 @@ final class AppViewModel: ObservableObject {
             previewImagePath = await downloader.downloadImage(from: imageURL, to: projectDir)
             if !previewImagePath.isEmpty {
                 appendLog("已保存预览图：\(previewImagePath)")
+                addTrafficFromFile(path: previewImagePath)
             }
         } else {
             previewImagePath = ""
@@ -821,6 +827,16 @@ final class AppViewModel: ObservableObject {
         if realtimeLogs.count > 200 {
             realtimeLogs.removeFirst(realtimeLogs.count - 200)
         }
+    }
+
+    private func addTrafficFromFile(path: String) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = attrs[.size] as? NSNumber else { return }
+        let bytes = fileSize.int64Value
+        sessionTrafficBytes += bytes
+        totalTrafficBytes += bytes
+        settings.saveTotalTrafficBytes(totalTrafficBytes)
+        appendLog("流量统计：本次 \(formatBytes(Double(sessionTrafficBytes)))，累计 \(formatBytes(Double(totalTrafficBytes)))")
     }
 
     private func appendDownloadLog(assetName: String, progress: DownloadProgressInfo) {

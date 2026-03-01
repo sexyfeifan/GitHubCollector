@@ -253,16 +253,21 @@ struct StorageService {
         }
 
         let validSuffixes = [
-            ".dmg", ".pkg", ".mpkg", ".app.zip",
-            ".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz",
-            ".tar.bz2", ".tbz2", ".tar", ".7z", ".gz", ".xz", ".bz2",
-            ".appimage", ".deb", ".rpm"
+            ".dmg", ".pkg", ".mpkg", ".app", ".app.zip",
+            ".ipa", ".apk", ".xapk", ".apks", ".aab",
+            ".zip"
         ]
         var inferred: [RepoRecord] = []
 
         for case let fileURL as URL in enumerator {
             let lower = fileURL.lastPathComponent.lowercased()
             guard validSuffixes.contains(where: { lower.hasSuffix($0) }) else { continue }
+            if lower.hasSuffix(".zip") {
+                let zipLikeInstall = lower.contains("app") || lower.contains("mac") || lower.contains("darwin") ||
+                    lower.contains("osx") || lower.contains("ios") || lower.contains("iphone") ||
+                    lower.contains("ipad") || lower.contains("android")
+                if !zipLikeInstall { continue }
+            }
 
             let rel = fileURL.path.replacingOccurrences(of: baseDir.path + "/", with: "")
             let comps = rel.split(separator: "/").map(String.init)

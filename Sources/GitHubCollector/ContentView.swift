@@ -171,6 +171,13 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 ProgressView(value: vm.fetchPrecision, total: 1.0)
+                HStack {
+                    Text("本次流量：\(formatBytes(vm.sessionTrafficBytes))")
+                    Spacer()
+                    Text("累计流量：\(formatBytes(vm.totalTrafficBytes))")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
 
             GroupBox("实时日志") {
@@ -404,6 +411,14 @@ struct ContentView: View {
             }
         }
     }
+}
+
+private func formatBytes(_ bytes: Int64) -> String {
+    let b = Double(bytes)
+    if b < 1024 { return String(format: "%.0fB", b) }
+    if b < 1024 * 1024 { return String(format: "%.1fKB", b / 1024) }
+    if b < 1024 * 1024 * 1024 { return String(format: "%.1fMB", b / (1024 * 1024)) }
+    return String(format: "%.2fGB", b / (1024 * 1024 * 1024))
 }
 
 private struct RepoCard: View {

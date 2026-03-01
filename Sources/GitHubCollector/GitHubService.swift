@@ -79,15 +79,15 @@ struct GitHubService {
             if name.hasSuffix(".dmg") { score = 120 }
             else if name.hasSuffix(".pkg") || name.hasSuffix(".mpkg") { score = 110 }
             else if name.hasSuffix(".app.zip") { score = 100 }
-            else if name.hasSuffix(".zip") { score = 90 }
-            else if name.hasSuffix(".tar.gz") || name.hasSuffix(".tgz") { score = 80 }
-            else if name.hasSuffix(".tar.xz") || name.hasSuffix(".txz") { score = 75 }
-            else if name.hasSuffix(".tar.bz2") || name.hasSuffix(".tbz2") { score = 72 }
-            else if name.hasSuffix(".tar") { score = 68 }
-            else if name.hasSuffix(".7z") { score = 66 }
-            else if name.hasSuffix(".gz") || name.hasSuffix(".xz") || name.hasSuffix(".bz2") { score = 60 }
+            else if name.hasSuffix(".app") { score = 96 }
+            else if name.hasSuffix(".ipa") { score = 94 }
+            else if name.hasSuffix(".apk") { score = 92 }
+            else if name.hasSuffix(".xapk") || name.hasSuffix(".apks") || name.hasSuffix(".aab") { score = 88 }
+            else if name.hasSuffix(".zip") { score = 82 }
 
             if name.contains("mac") || name.contains("darwin") || name.contains("osx") { score += 15 }
+            if name.contains("ios") || name.contains("iphone") || name.contains("ipad") { score += 10 }
+            if name.contains("android") { score += 10 }
             if name.contains("arm64") || name.contains("aarch64") || name.contains("apple-silicon") { score += 6 }
             if name.contains("universal") { score += 5 }
             if name.contains("checksum") || name.contains("sha256") || name.contains(".sig") || name.contains(".asc") { score -= 80 }
@@ -100,12 +100,16 @@ struct GitHubService {
 
     private func isInstallableAsset(_ name: String) -> Bool {
         let suffixes = [
-            ".dmg", ".pkg", ".mpkg", ".app.zip",
-            ".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz",
-            ".tar.bz2", ".tbz2", ".tar", ".7z", ".gz", ".xz", ".bz2",
-            ".appimage", ".deb", ".rpm"
+            ".dmg", ".pkg", ".mpkg", ".app", ".app.zip",
+            ".ipa", ".apk", ".xapk", ".apks", ".aab",
+            ".zip"
         ]
-        return suffixes.contains(where: { name.hasSuffix($0) })
+        guard suffixes.contains(where: { name.hasSuffix($0) }) else { return false }
+        if name.hasSuffix(".zip") {
+            return name.contains("app") || name.contains("mac") || name.contains("darwin") || name.contains("osx") ||
+                name.contains("ios") || name.contains("iphone") || name.contains("ipad") || name.contains("android")
+        }
+        return true
     }
 
     func fetchStarredRepoURLs(username: String) async throws -> [String] {
