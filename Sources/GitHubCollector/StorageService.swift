@@ -252,7 +252,12 @@ struct StorageService {
             return []
         }
 
-        let validSuffixes = [".dmg", ".pkg", ".zip", ".tar.gz"]
+        let validSuffixes = [
+            ".dmg", ".pkg", ".mpkg", ".app.zip",
+            ".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz",
+            ".tar.bz2", ".tbz2", ".tar", ".7z", ".gz", ".xz", ".bz2",
+            ".appimage", ".deb", ".rpm"
+        ]
         var inferred: [RepoRecord] = []
 
         for case let fileURL as URL in enumerator {
