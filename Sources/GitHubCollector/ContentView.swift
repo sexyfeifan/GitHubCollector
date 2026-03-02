@@ -556,12 +556,13 @@ private struct RepoCard: View {
     let deleteRecord: (Bool) -> Void
 
     @State private var showDeletePanel = false
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(record.projectName)
-                    .font(.headline)
+                    .font(.system(size: 18, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
                 Text(record.releaseTag)
@@ -629,9 +630,16 @@ private struct RepoCard: View {
         .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 420, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(NSColor.windowBackgroundColor))
-                .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.12), radius: isHovering ? 6 : 4, x: 0, y: 2)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isHovering ? Color.accentColor.opacity(0.6) : Color.gray.opacity(0.25), lineWidth: isHovering ? 2 : 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onTapGesture { openDetail() }
+        .onHover { isHovering = /bin/zsh }
         .clipped()
     }
 }
