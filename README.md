@@ -1,80 +1,48 @@
-# GitHubCollector (macOS)
+# 🚀 GitHubCollector (macOS)
 
 GitHubCollector 是一个 macOS 桌面工具，用于批量收集 GitHub 项目、自动下载最新 Release 安装包，并在本地形成可搜索的软件库。
 
-## 1.0.12 更新
+## ✨ 核心能力
 
-- Token 入钥匙串：GitHub Token / OpenAI Key 迁移并保存在系统钥匙串中（更安全），旧版会自动迁移；
-- 仅 macOS 安装包：新增“仅 macOS 资产”过滤开关（设置页/首页），扫描与下载都将只匹配 ；
-- 列表筛选与排序：按更新时间/Star 数/名称排序，支持最小 Star、语言过滤、排除 Fork；
-- 限流与超时：请求默认超时，命中 GitHub 限流时会提示重置时间，便于重试；
-- 可靠性：本地记录加载与目录扫描对 macOS-only 过滤生效，资产选择策略与安装包识别更稳健。
+- 🔗 识别并抓取仓库链接：`https://github.com/<owner>/<repo>`
+- ⭐ 支持 stars 页面批量导入：`https://github.com/<username>?tab=stars`
+- 📦 自动抓取仓库简介、README、最新 Release，并优选安装包下载
+- 🌍 支持中文翻译（可配置 OpenAI，失败自动回退原文）
+- 🧠 自动生成摘要，首页卡片快速浏览
+- 🔄 同步库：对比远程版本，发现新版本自动下载并归档旧版本
+- 🗂️ 本地分类管理、搜索过滤、分页展示（每页 12 项）
+- 🧹 一键整理分类：按项目类型重组目录，支持预览勾选
+- 📜 抓取实时日志（含下载链接、速度、进度）与日志详情展开
+- 📊 流量计量（本次流量 + 累计流量）
+- 🛡️ 支持 GitHub Token，提升 API 配额并减少限流失败
 
-## 主要功能
+## 🆕 最新版本（v1.0.17）
 
-- 识别并抓取 GitHub 仓库链接：`https://github.com/<owner>/<repo>`
-- 支持 stars 页面批量导入：`https://github.com/<username>?tab=stars`
-- 自动抓取仓库简介、README、最新 Release 信息
-- 支持中文翻译（可配置 OpenAI，失败自动回退原文）
-- 生成简要摘要，首页卡片快速浏览
-- 自动下载并优选安装包（按移动端/苹果安装格式优选）
-- 同步库：对比远程版本，发现新版本自动下载并归档旧版本
-- 本地分类管理、搜索过滤、分页展示（每页 12 项）
-- 失败项目汇总（含项目名、GitHub 链接、失败原因）
-- 详情窗口支持 Markdown 渲染 / 原文切换
-- 抓取实时日志（含下载链接、速度、进度），并支持展开单独查看
-- 抓取流量计量（本次流量 + 累计流量）
-- 设置中支持 GitHub Token，提升 API 配额并减少限流失败
-- 设置按下载目录存储（`collector_settings.json`），切换目录可自动加载对应配置
-- 抓取前自动跳过：本地已存在项目、3 年未更新项目、已归档/禁用/不可用项目
-- 抓取中点击停止会丢弃当前项目，避免半成品入库
+本版本重点做了首页体验和目录对齐：
 
-## 安装包格式策略（当前）
+- ✅ 移除“卡片大小”设置，卡片布局更紧凑，减少空白
+- ✅ 实时日志详情窗口加宽，长日志行可读性更好
+- ✅ “刷新列表”改为目录对比刷新：核对文件目录并同步首页项目与分类数量
+- ✅ “未分类”在首页分类按钮中固定排最后
+- ✅ 增强目录扫描：无安装包但存在项目目录的内容也可被识别并纳入整理预览
 
-## 1.0.13 更新
+## 🧭 分类与整理规则（当前）
 
-- 新增：一键“整理分类”，将项目从“有/无安装包项目”搬迁到类型分类文件夹；
-- 调整：按项目类型模式下的分类，直接对齐下载目录的一级文件夹（自动排除“有安装包项目/无安装包项目”两个临时分组）。
+- 默认仅按“项目类型”分类展示（与下载目录一级文件夹对齐）
+- 新项目默认按类型归档
+- 整理分类支持预览、全选/全不选、执行日志进度
+- 若无法可靠判断类型，会进入“未分类”
 
-使用方式：在首页分类区域点击“整理分类”，完成后列表会自动刷新。
-
-## 1.0.14 更新（UI）
-
-- 首页项目卡片采用更清晰的块状分割：增加圆角边框与阴影；
-- 项目名字号略增大（更醒目）；
-- 支持点击整个项目卡片直接进入详情。
+## 📦 安装包识别策略
 
 当前下载优选与本地扫描聚焦以下格式：
 
 - Apple 安装包：`.dmg`, `.pkg`, `.mpkg`, `.app`, `.app.zip`
 - iOS 安装包：`.ipa`
 - Android 安装包：`.apk`, `.xapk`, `.apks`, `.aab`
-- `.zip`：仅当文件名明显包含 `app/mac/darwin/osx/ios/android` 等安装相关关键词时，才视为可下载安装包
+- `.zip`：仅当文件名包含 `app/mac/darwin/osx/ios/android` 等安装相关关键词时，视为可下载安装包
 
-
-## 1.0.16 更新
-
-- 固定：仅按“项目类型”分类，移除“按安装包/无安装包”的显示方式与设置项；
-- 首页：项目卡片移除缩略图；双击整卡打开详情；卡片仅保留“GitHub/打开目录”两个操作；
-- 详情：将“GitHub/打开目录/重新翻译/离线排版”搬到标题下方；右上角移除“离线排版”按钮；
-- 整理分类：执行时在首页日志显示 (i/N) 进度与最终统计；
-- 导入归类：新项目始终按类型归档，不再放入“有/无安装包项目”。
-
-## 项目结构
-
-- `Package.swift`: Swift Package 定义
-- `Sources/GitHubCollector/GitHubCollectorApp.swift`: App 入口
-- `Sources/GitHubCollector/ContentView.swift`: 主界面与详情页
-- `Sources/GitHubCollector/AppViewModel.swift`: 抓取流程、同步、状态管理
-- `Sources/GitHubCollector/GitHubService.swift`: GitHub API 抓取与资产选择
-- `Sources/GitHubCollector/DownloadService.swift`: 下载安装与进度回调
-- `Sources/GitHubCollector/StorageService.swift`: 本地持久化与目录扫描
-- `Sources/GitHubCollector/TextServices.swift`: 翻译、总结、分类
-- `Sources/GitHubCollector/SettingsStore.swift`: 配置持久化与流量统计存储
-- `Sources/GitHubCollector/URLParser.swift`: 链接解析
-- `Sources/GitHubCollector/NativeInputField.swift`: 原生输入控件
-
-## 本地运行
+## 🖥️ 运行方式
 
 ```bash
 cd "/Users/sexyfeifan/Documents/Codex/GitHubCollector"
@@ -83,42 +51,68 @@ CLANG_MODULE_CACHE_PATH="$PWD/.clang-cache" swift build
 swift run
 ```
 
-## 打包
-
-### 打包 `.app` + `.dmg`（固定图标）
+## 📀 打包（.app + .dmg）
 
 ```bash
 cd "/Users/sexyfeifan/Documents/Codex/GitHubCollector"
-./scripts/package_macos.sh
+./scripts/package_macos.sh 1.0.17
 ```
 
-该脚本会：
+脚本会：
 
 - 执行 release 构建
 - 组装 `dist/GitHubCollector.app`
 - 使用固定图标 `Resources/AppIcon.icns`
 - 生成 `dist/GitHubCollector.dmg`
 
-发布产物：
+## 🚚 发布流程（手工）
 
-- `dist/GitHubCollector.app`
-- `dist/GitHubCollector.dmg`
+1. 本地备份（不入库）：`./scripts/create_local_backup.sh <version>`
+2. 打包：`./scripts/package_macos.sh <version>`
+3. 提交与 tag：
+   - `git add dist/GitHubCollector.dmg`
+   - `git commit -m "chore(release): <version> dmg"`
+   - `git tag -a v<version> -m "GitHubCollector <version>"`
+   - `git push origin master && git push origin v<version>`
+4. 创建 GitHub Release 并上传 `dist/GitHubCollector.dmg`
 
-## 数据存储
+## 🗄️ 数据存储
 
-默认存储到：
+默认位置：
 
 - `~/Downloads/GitHubCollector/<分类>/<项目>/...`
 - `~/Downloads/GitHubCollector/records.json`
 
-支持在设置中自定义下载路径，切换后会自动扫描已有文件。
-
-每个项目目录会额外写入：
+每个项目目录附带：
 
 - `README_COLLECTOR.md`
 - `project_info.json`
 
-## 说明
+支持在设置中自定义下载路径；切换目录会自动扫描已有文件并加载目录级配置（`collector_settings.json`）。
 
-- 首页输入区在部分系统环境可能存在键盘焦点异常，提供了“输入链接”弹窗作为稳定输入兜底入口。
-- 若提示限流，请在设置中配置 GitHub Token，或等待错误提示中的重置时间后重试。
+## 🧱 项目结构
+
+- `Package.swift`：Swift Package 定义
+- `Sources/GitHubCollector/GitHubCollectorApp.swift`：App 入口
+- `Sources/GitHubCollector/ContentView.swift`：主界面与详情页
+- `Sources/GitHubCollector/AppViewModel.swift`：抓取流程、同步、状态管理
+- `Sources/GitHubCollector/AppViewModel+Reorg.swift`：分类整理预览与执行
+- `Sources/GitHubCollector/GitHubService.swift`：GitHub API 抓取与资产选择
+- `Sources/GitHubCollector/DownloadService.swift`：下载安装与进度回调
+- `Sources/GitHubCollector/StorageService.swift`：本地持久化与目录扫描
+- `Sources/GitHubCollector/TextServices.swift`：翻译、总结、分类
+- `Sources/GitHubCollector/SettingsStore.swift`：配置持久化与流量统计
+
+## 📝 历史版本（简要）
+
+- `v1.0.16`：固定按类型分类、首页卡片精简、详情操作重排、整理进度日志
+- `v1.0.15`：整理分类预览清单、卡片 hover/高亮、分类规则文件支持
+- `v1.0.14`：卡片块状化与交互优化
+- `v1.0.13`：一键整理分类（有/无安装包目录迁移）
+- `v1.0.12`：Token 入钥匙串、仅 macOS 资产过滤、排序筛选增强
+
+## ❗ 常见问题
+
+- 出现限流：在设置中配置 GitHub Token，或等待重置时间后重试
+- 输入框焦点异常：使用“输入链接”弹窗导入
+- 停止抓取：当前项目会丢弃半成品，避免脏数据入库
