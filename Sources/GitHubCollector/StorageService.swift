@@ -180,10 +180,11 @@ struct StorageService {
 
         let fromInfoFiles = try scanInfoFiles(baseDir: baseDir)
         let inferred = try inferRecordsFromPackages(baseDir: baseDir, macOnly: macOnly)
+        let folderInferred = try inferRecordsFromProjectFolders(baseDir: baseDir, macOnly: macOnly)
         let ignored = try loadIgnoredIDs(baseDir: baseDir)
 
         var merged: [String: RepoRecord] = [:]
-        for r in recordsFromDB + fromInfoFiles + inferred {
+        for r in recordsFromDB + fromInfoFiles + inferred + folderInferred {
             if let existing = merged[r.id] {
                 merged[r.id] = existing.updatedAt >= r.updatedAt ? existing : r
             } else {
@@ -360,6 +361,125 @@ struct StorageService {
         return inferred
     }
 
+
+    private func inferRecordsFromProjectFolders(baseDir: URL, macOnly: Bool) throws -> [RepoRecord] {
+        let validSuffixes = [
+            ".dmg", ".pkg", ".mpkg", ".app", ".app.zip",
+            ".ipa", ".apk", ".xapk", ".apks", ".aab",
+            ".zip"
+        ]
+
+        func isInstallFileName(_ name: String) -> Bool {
+            let lower = name.lowercased()
+            guard validSuffixes.contains(where: { lower.hasSuffix($0) }) else { return false }
+
+            if macOnly {
+                if lower.hasSuffix(".dmg") || lower.hasSuffix(".pkg") || lower.hasSuffix(".mpkg") ||
+                    lower.hasSuffix(".app") || lower.hasSuffix(".app.zip") {
+                    return true
+                }
+                if lower.hasSuffix(".zip") {
+                    return lower.contains("mac") || lower.contains("darwin") || lower.contains("osx") || lower.contains("app")
+                }
+                return false
+            }
+
+            if lower.hasSuffix(".zip") {
+                let zipLikeInstall = lower.contains("app") || lower.contains("mac") || lower.contains("darwin") ||
+                    lower.contains("osx") || lower.contains("ios") || lower.contains("iphone") ||
+                    lower.contains("ipad") || lower.contains("android")
+                return zipLikeInstall
+            }
+
+            return true
+        }
+
+        guard let categories = try? fm.contentsOfDirectory(
+            at: baseDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var inferred: [RepoRecord] = []
+
+        for categoryDir in categories {
+            var isCatDir: ObjCBool = false
+            guard fm.fileExists(atPath: categoryDir.path, isDirectory: &isCatDir), isCatDir.boolValue else { continue }
+
+            let category = categoryDir.lastPathComponent
+            let projects = (try? fm.contentsOfDirectory(
+                at: categoryDir,
+                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+
+            for projectDir in projects {
+                var isProjDir: ObjCBool = false
+                guard fm.fileExists(atPath: projectDir.path, isDirectory: &isProjDir), isProjDir.boolValue else { continue }
+
+                let projectName = projectDir.lastPathComponent
+                if fm.fileExists(atPath: projectDir.appendingPathComponent("project_info.json").path) { continue }
+
+                let entries = (try? fm.contentsOfDirectory(
+                    at: projectDir,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+
+                let fileNames: [String] = entries.compactMap { url in
+                    let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    return isDir ? nil : url.lastPathComponent
+                }
+
+                // If this folder already has a recognizable install package, prefer package inference.
+                if fileNames.contains(where: isInstallFileName) { continue }
+
+                let sorted = fileNames.sorted()
+                let sampleCSV = sorted.prefix(12).joined(separator: ", ")
+                let descEN = sampleCSV.isEmpty
+                    ? "Detected local project folder: \(projectName)."
+                    : "Detected local project folder: \(projectName). Files: \(sampleCSV)"
+                let summaryZH = sampleCSV.isEmpty
+                    ? "从本地文件夹检测到项目目录（未识别安装包）。"
+                    : "从本地文件夹检测到文件：\(sorted.prefix(6).joined(separator: ", "))"
+
+                let mod = (try? projectDir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+                let id = "folder/\(safe(category).lowercased())/\(safe(projectName).lowercased())"
+
+                inferred.append(RepoRecord(
+                    id: id,
+                    owner: "local",
+                    repo: safe(projectName).lowercased(),
+                    projectName: projectName,
+                    sourceURL: "",
+                    descriptionEN: descEN,
+                    descriptionZH: "",
+                    summaryZH: summaryZH,
+                    releaseNotesEN: "",
+                    releaseNotesZH: "",
+                    setupGuideEN: "",
+                    formattedZH: "",
+                    category: category,
+                    language: "Unknown",
+                    stars: 0,
+                    isFork: false,
+                    releaseTag: "Unknown",
+                    releaseAssetName: "文件夹（未识别安装包）",
+                    releaseAssetURL: "",
+                    hasDownloadAsset: false,
+                    localPath: "",
+                    previewImagePath: "",
+                    storageRootPath: baseDir.path,
+                    infoFilePath: "",
+                    updatedAt: mod
+                ))
+            }
+        }
+
+        return inferred
+    }
     private func safe(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>\n\r")
         return name.components(separatedBy: invalid).joined(separator: "_")

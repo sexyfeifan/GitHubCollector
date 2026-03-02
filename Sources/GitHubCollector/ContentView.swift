@@ -10,13 +10,7 @@ struct ContentView: View {
     @State private var showFailureSheet = false
 
     private var columns: [GridItem] {
-        let minWidth: CGFloat
-        switch vm.cardSize {
-        case .small: minWidth = 300
-        case .medium: minWidth = 360
-        case .large: minWidth = 420
-        }
-        return [GridItem(.adaptive(minimum: minWidth), spacing: 16)]
+        [GridItem(.adaptive(minimum: 340), spacing: 12)]
     }
 
     var body: some View {
@@ -47,7 +41,7 @@ struct ContentView: View {
                 categoryPanel
 
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 16) {
+                    LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(vm.pagedRecords) { record in
                             RepoCard(
                                 record: record,
@@ -60,8 +54,7 @@ struct ContentView: View {
                                 deleteRecord: { deleteFiles in
                                     vm.deleteRecord(record, deleteFiles: deleteFiles)
                                 },
-                                isSelected: detailRecord?.id == record.id,
-                                cardSize: vm.cardSize
+                                isSelected: detailRecord?.id == record.id
                             )
                         }
                     }
@@ -113,7 +106,7 @@ struct ContentView: View {
             LogDetailView(logs: vm.realtimeLogs) {
                 showLogSheet = false
             }
-            .frame(minWidth: 920, minHeight: 620)
+            .frame(minWidth: 1200, minHeight: 700)
         }
         .sheet(isPresented: $showFailureSheet) {
             FailureHubView(
@@ -152,7 +145,7 @@ struct ContentView: View {
     }
 
     private var inputPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("导入 GitHub 链接（单个或批量，每行一个）")
                     .font(.headline)
@@ -197,18 +190,6 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                     .disabled(vm.isLoading)
             }
-            HStack(spacing: 10) {
-                Text("卡片大小：").font(.caption).foregroundStyle(.secondary)
-                Picker("卡片大小", selection: $vm.cardSize) {
-                    Text("小").tag(AppViewModel.CardSize.small)
-                    Text("中").tag(AppViewModel.CardSize.medium)
-                    Text("大").tag(AppViewModel.CardSize.large)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 220)
-                Spacer()
-            }
-
             HStack(spacing: 8) {
                 Text("搜索项目")
                     .font(.caption)
@@ -282,7 +263,7 @@ struct ContentView: View {
             Text("GitHub API")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("GitHub Token（用于提升 API 配额）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -306,7 +287,7 @@ struct ContentView: View {
             Text("OpenAI API")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("API Key")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -325,7 +306,7 @@ struct ContentView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Base URL")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -339,7 +320,7 @@ struct ContentView: View {
                     )
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Model")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -368,7 +349,7 @@ struct ContentView: View {
             Text("下载与导入")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("失败重试次数")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -378,7 +359,7 @@ struct ContentView: View {
             }
 
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("软件下载路径")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -407,7 +388,7 @@ struct ContentView: View {
 
             Spacer()
         }
-        .padding(12)
+        .padding(10)
     }
     private var queuePanel: some View {
         GroupBox("任务队列") {
@@ -449,7 +430,7 @@ struct ContentView: View {
     }
 
     private var categoryPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("当前分类")
                     .font(.caption)
@@ -469,7 +450,7 @@ struct ContentView: View {
                     }
                 }
                 Button("刷新列表") {
-                    vm.reloadRecords()
+                    vm.refreshListFromDisk()
                 }
                 .buttonStyle(.bordered)
                 Button("整理分类") { vm.startReorganizePreview()
@@ -477,18 +458,6 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(vm.isLoading)
             }
-            HStack(spacing: 10) {
-                Text("卡片大小：").font(.caption).foregroundStyle(.secondary)
-                Picker("卡片大小", selection: $vm.cardSize) {
-                    Text("小").tag(AppViewModel.CardSize.small)
-                    Text("中").tag(AppViewModel.CardSize.medium)
-                    Text("大").tag(AppViewModel.CardSize.large)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 220)
-                Spacer()
-            }
-
             if !vm.failedProjects.isEmpty {
                 GroupBox("失败项目汇总（可跳转检查）") {
                     HStack {
@@ -581,16 +550,13 @@ private struct RepoCard: View {
     let openDetail: () -> Void
     let deleteRecord: (Bool) -> Void
     let isSelected: Bool
-    let cardSize: AppViewModel.CardSize
 
     @State private var showDeletePanel = false
     @State private var isHovering = false
-
-    private var titleFontSize: CGFloat { switch cardSize { case .small: return 16; case .medium: return 18; case .large: return 20 } }
-    private var cardHeight: CGFloat { switch cardSize { case .small: return 340; case .medium: return 380; case .large: return 420 } }
+    private let titleFontSize: CGFloat = 18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(record.projectName)
                     .font(.system(size: titleFontSize, weight: .semibold))
@@ -647,10 +613,9 @@ private struct RepoCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight, alignment: .topLeading)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(NSColor.controlBackgroundColor))

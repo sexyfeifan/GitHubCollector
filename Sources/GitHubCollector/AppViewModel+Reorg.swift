@@ -27,13 +27,25 @@ extension AppViewModel {
         var moved = 0
         var examined = 0
 
-        for r in records {
-            if let set = selectedIDs, !set.contains(r.id) { continue }
+        let targets = records.filter { r in
+            if let set = selectedIDs { return set.contains(r.id) }
+            return true
+        }
+        let total = targets.count
+        var index = 0
+
+        for r in targets {
+            index += 1
             examined += 1
             let currentCat = (folderCategoryFromPaths(for: r, base: base) ?? r.category)
             let targetCat = computeTypeCategory(for: r)
-            if targetCat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
-            if currentCat == targetCat && currentCat != "有安装包项目" && currentCat != "无安装包项目" { continue }
+            if targetCat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                log("(\(index)/\(total)) \(r.projectName) -> 未识别分类，跳过")
+                continue
+            }
+            log("(\(index)/\(total)) \(r.projectName) -> \(targetCat)")
+            if currentCat == targetCat && currentCat != "有安装包项目" && currentCat != "无安装包项目" && currentCat != "未分类" { continue }
+            if currentCat == targetCat { continue }
 
             let src = base.appendingPathComponent(safeName(currentCat)).appendingPathComponent(safeName(r.projectName), isDirectory: true)
             let dstParent = base.appendingPathComponent(safeName(targetCat), isDirectory: true)
@@ -153,7 +165,7 @@ extension AppViewModel {
         for r in records {
             let currentCat = (folderCategoryFromPaths(for: r, base: base) ?? r.category)
             let targetCat = computeTypeCategory(for: r)
-            if currentCat == targetCat && currentCat != "有安装包项目" && currentCat != "无安装包项目" { continue }
+            if currentCat == targetCat && currentCat != "有安装包项目" && currentCat != "无安装包项目" && currentCat != "未分类" { continue }
             items.append(ReorgPreviewItem(id: r.id, selected: true, name: r.projectName, currentCategory: currentCat, targetCategory: targetCat))
         }
         reorgPreviewItems = items

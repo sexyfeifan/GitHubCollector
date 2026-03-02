@@ -93,10 +93,6 @@ final class AppViewModel: ObservableObject {
     @Published var minStars: Int = 0
     @Published var languageFilter: String = ""
     @Published var excludeForks: Bool = false
-    @Published var cardSize: CardSize = .medium
-
-    enum CardSize: String, CaseIterable { case small, medium, large }
-
     enum SortOption: String, CaseIterable { case recent, stars, name }
     var sortTitle: String { switch sortOption { case .recent: return "最近更新"; case .stars: return "Stars"; case .name: return "名称" } }
 
@@ -198,7 +194,12 @@ final class AppViewModel: ObservableObject {
         if set.isEmpty {
             set = Set(records.map { r in categoryLabel(for: r) })
         }
-        return ["全部"] + Array(set).sorted()
+        var arr = Array(set).sorted()
+        if let idx = arr.firstIndex(of: "未分类") {
+            arr.remove(at: idx)
+            arr.append("未分类")
+        }
+        return ["全部"] + arr
     }
     var filteredRecords: [RepoRecord] {
         var categoryFiltered: [RepoRecord]
@@ -581,6 +582,12 @@ final class AppViewModel: ObservableObject {
         } catch {
             errorMessage = "读取本地记录失败: \(error.localizedDescription)"
         }
+    }
+
+    func refreshListFromDisk() {
+        reloadRecords()
+        statusMessage = "已对比目录并刷新：\(records.count) 项"
+        appendLog(statusMessage)
     }
 
     func syncLibrary() {
