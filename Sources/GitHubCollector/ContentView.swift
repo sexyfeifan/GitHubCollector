@@ -106,19 +106,21 @@ struct ContentView: View {
             LogDetailView(logs: vm.realtimeLogs) {
                 showLogSheet = false
             }
-            .frame(minWidth: 1200, minHeight: 700)
+            .frame(minWidth: 1400, minHeight: 720)
         }
         .sheet(isPresented: $showFailureSheet) {
             FailureHubView(
                 all: vm.failedProjects,
                 notFound: vm.failed404Projects,
-                timeout: vm.failedTimeoutProjects,
-                other: vm.failedOtherProjects,
-                openURL: vm.openGitHubURL
+                failed: vm.failedNon404Projects,
+                canRetry: vm.crawlState != .running,
+                openURL: vm.openGitHubURL,
+                openAll: vm.openGitHubURLs,
+                retryAll: vm.retryFailedProjectURLs
             ) {
                 showFailureSheet = false
             }
-            .frame(minWidth: 880, minHeight: 620)
+            .frame(minWidth: 980, minHeight: 640)
         }
         .onChange(of: vm.searchQuery) { _ in
             vm.resetPageToFirst()
@@ -461,7 +463,7 @@ struct ContentView: View {
             if !vm.failedProjects.isEmpty {
                 GroupBox("失败项目汇总（可跳转检查）") {
                     HStack {
-                        Text("404: \(vm.failed404Projects.count)  超时: \(vm.failedTimeoutProjects.count)  其他: \(vm.failedOtherProjects.count)")
+                        Text("404项目: \(vm.failed404Projects.count)  失败项目: \(vm.failedNon404Projects.count)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -829,10 +831,11 @@ private struct LogDetailView: View {
                         Text(line)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(logColor(line))
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: true, vertical: false)
                             .textSelection(.enabled)
                     }
                 }
+                .frame(minWidth: 1500, alignment: .leading)
                 .padding(8)
             }
             .background(Color(NSColor.textBackgroundColor))
@@ -862,9 +865,11 @@ private struct LogDetailView: View {
 private struct FailureHubView: View {
     let all: [AppViewModel.FailedProject]
     let notFound: [AppViewModel.FailedProject]
-    let timeout: [AppViewModel.FailedProject]
-    let other: [AppViewModel.FailedProject]
+    let failed: [AppViewModel.FailedProject]
+    let canRetry: Bool
     let openURL: (String) -> Void
+    let openAll: ([String]) -> Void
+    let retryAll: ([String]) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -877,55 +882,71 @@ private struct FailureHubView: View {
                     .buttonStyle(.borderedProminent)
             }
 
-            Text("总计 \(all.count) 项；404 \(notFound.count) 项；超时 \(timeout.count) 项；其他 \(other.count) 项")
+            Text("总计 \(all.count) 项；404项目 \(notFound.count) 项；失败项目 \(failed.count) 项")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            GroupBox("404 / 项目不可用") {
-                failureList(notFound)
+            GroupBox("404项目") {
+                failureList(notFound, accent: .orange)
             }
-            GroupBox("超时项目") {
-                failureList(timeout)
-            }
-            GroupBox("其他抓取失败") {
-                failureList(other)
+            GroupBox("失败项目") {
+                failureList(failed, accent: .red)
             }
         }
         .padding(16)
     }
 
-    private func failureList(_ items: [AppViewModel.FailedProject]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                if items.isEmpty {
-                    Text("暂无")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    private func failureList(_ items: [AppViewModel.FailedProject], accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("共 \(items.count) 项")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("一键重试") {
+                    retryAll(items.map(\.url))
                 }
-                ForEach(items) { item in
-                    HStack {
-                        Text(item.name)
-                            .font(.caption)
-                        Spacer()
-                        Button("打开 GitHub") {
-                            openURL(item.url)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Text(item.url)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Text(item.reason)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                    Divider()
+                .buttonStyle(.borderedProminent)
+                .disabled(items.isEmpty || !canRetry)
+                Button("一键打开所有 GitHub") {
+                    openAll(items.map(\.url))
                 }
+                .buttonStyle(.bordered)
+                .disabled(items.isEmpty)
             }
-            .padding(4)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if items.isEmpty {
+                        Text("暂无")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(items) { item in
+                        HStack(alignment: .top) {
+                            Text(item.name)
+                                .font(.caption)
+                            Spacer(minLength: 8)
+                            Button("打开 GitHub") {
+                                openURL(item.url)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Text(item.url)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("失败原因：\(item.reason)")
+                            .font(.caption2)
+                            .foregroundStyle(accent)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                    }
+                }
+                .padding(4)
+            }
+            .frame(height: 180)
         }
-        .frame(height: 150)
     }
 }
 

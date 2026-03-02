@@ -124,6 +124,7 @@ final class AppViewModel: ObservableObject {
     private var stopRequested = false
     private var queueTask: Task<Void, Never>?
     private var knownRecordIDs: Set<String> = []
+    private var knownURLs: Set<String> = []
     private var currentProjectName: String = ""
 
     private let github = GitHubService()
@@ -170,6 +171,10 @@ final class AppViewModel: ObservableObject {
 
     var failedOtherProjects: [FailedProject] {
         failedProjects.filter { $0.type == .fetchFailed }
+    }
+
+    var failedNon404Projects: [FailedProject] {
+        failedProjects.filter { $0.type != .notFound404 }
     }
 
     var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
@@ -477,6 +482,7 @@ final class AppViewModel: ObservableObject {
             errorMessage = "未识别到有效的 GitHub 链接。"
             return
         }
+        rememberKnownURLs(urls)
 
         queueTask?.cancel()
         queueTask = Task {
@@ -485,6 +491,7 @@ final class AppViewModel: ObservableObject {
                 errorMessage = "没有可抓取的仓库链接。"
                 return
             }
+            rememberKnownURLs(expanded)
             prepareQueue(with: expanded)
             await runPreparedQueue()
         }
@@ -513,8 +520,13 @@ final class AppViewModel: ObservableObject {
     }
 
     func retryFailedImports() {
-        let retries = failedURLs
+        retryFailedProjectURLs(failedURLs)
+    }
+
+    func retryFailedProjectURLs(_ urls: [String]) {
+        let retries = uniqueRepoURLs(urls)
         guard !retries.isEmpty else { return }
+        rememberKnownURLs(retries)
         queueTask?.cancel()
         queueTask = Task {
             prepareQueue(with: retries)
@@ -523,8 +535,17 @@ final class AppViewModel: ObservableObject {
     }
 
     func openGitHubURL(_ rawURL: String) {
-        guard let url = URL(string: rawURL), !rawURL.isEmpty else { return }
+        guard let normalized = normalizedKnownURL(rawURL),
+              let url = URL(string: normalized) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func openGitHubURLs(_ urls: [String]) {
+        let all = uniqueKnownURLs(urls)
+        guard !all.isEmpty else { return }
+        for raw in all {
+            openGitHubURL(raw)
+        }
     }
 
     func openInFinder(_ record: RepoRecord) {
@@ -577,6 +598,7 @@ final class AppViewModel: ObservableObject {
             let records = try storage.loadRecords(baseDir: activeBaseDir, macOnly: onlyMacOSAssets)
             self.records = records
             self.knownRecordIDs = Set(records.map { $0.id })
+            reloadKnownURLs()
             ensureValidCategorySelection()
             ensureValidPage()
         } catch {
@@ -798,13 +820,13 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func importOne(url: String, retries: Int) async throws -> RepoRecord {
+    private func importOne(url: String, retries: Int, allowExisting: Bool = false) async throws -> RepoRecord {
         var lastError: Error?
         let maxAttempt = max(1, min(retries, 5))
 
         for attempt in 1...maxAttempt {
             do {
-                return try await importOneAttempt(url: url)
+                return try await importOneAttempt(url: url, allowExisting: allowExisting)
             } catch {
                 lastError = error
                 if attempt < maxAttempt {
@@ -817,14 +839,14 @@ final class AppViewModel: ObservableObject {
         throw lastError ?? URLError(.cannotParseResponse)
     }
 
-    private func importOneAttempt(url: String) async throws -> RepoRecord {
+    private func importOneAttempt(url: String, allowExisting: Bool) async throws -> RepoRecord {
         let identity = try URLParser.parseGitHubRepo(from: url)
         let id = identity.fullName.lowercased()
 
-        if knownRecordIDs.contains(id) {
+        if !allowExisting && knownRecordIDs.contains(id) {
             throw ImportSkipError.alreadyExists(identity.fullName)
         }
-        if storage.hasProjectDirectory(baseDir: activeBaseDir, project: identity.name) {
+        if !allowExisting && storage.hasProjectDirectory(baseDir: activeBaseDir, project: identity.name) {
             throw ImportSkipError.alreadyExists(identity.fullName)
         }
 
@@ -849,7 +871,7 @@ final class AppViewModel: ObservableObject {
            updatedAt < threeYearsAgoDate() {
             throw ImportSkipError.staleProject(lastUpdated: formattedDate(updatedAt))
         }
-        if storage.hasProjectDirectory(baseDir: activeBaseDir, project: fetchedRepo.name) {
+        if !allowExisting && storage.hasProjectDirectory(baseDir: activeBaseDir, project: fetchedRepo.name) {
             throw ImportSkipError.alreadyExists(fetchedRepo.fullName)
         }
 
@@ -952,7 +974,9 @@ final class AppViewModel: ObservableObject {
             localPath: localPath,
             previewImagePath: previewImagePath
         )
-        return try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
+        let saved = try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
+        rememberKnownURLs([saved.sourceURL])
+        return saved
     }
 
     private func runSyncLibrary() async {
@@ -961,7 +985,7 @@ final class AppViewModel: ObservableObject {
         defer { isLoading = false }
 
         reloadRecords()
-        let snapshot = records.filter { !$0.sourceURL.isEmpty && $0.sourceURL.contains("github.com") }
+        let snapshot = await resolveSyncRepoURLs()
         guard !snapshot.isEmpty else {
             statusMessage = "已同步本地库（无可校验项目）。"
             appendLog("同步完成：无可校验项目。")
@@ -970,24 +994,34 @@ final class AppViewModel: ObservableObject {
 
         appendLog("开始同步库，共 \(snapshot.count) 个 GitHub 项目。")
         var updatedCount = 0
+        var importedCount = 0
         var checkedCount = 0
 
-        for record in snapshot {
+        for repoURL in snapshot {
             checkedCount += 1
-            statusMessage = "同步中 (\(checkedCount)/\(snapshot.count))：\(record.fullName)"
-            appendLog("校验版本：\(record.fullName)")
+            statusMessage = "同步中 (\(checkedCount)/\(snapshot.count))：\(projectNameFromURL(repoURL))"
+            appendLog("校验版本：\(repoURL)")
+
             do {
-                let updated = try await syncRecordIfNeeded(record)
-                if updated { updatedCount += 1 }
+                let identity = try URLParser.parseGitHubRepo(from: repoURL)
+                if let current = records.first(where: { $0.id == identity.fullName.lowercased() }) {
+                    let updated = try await syncRecordIfNeeded(current)
+                    if updated { updatedCount += 1 }
+                } else {
+                    _ = try await importOne(url: repoURL, retries: 1)
+                    importedCount += 1
+                    appendLog("同步补录成功：\(identity.fullName)")
+                }
             } catch {
-                appendLog("同步失败：\(record.fullName)，原因：\(error.localizedDescription)")
+                appendLog("同步失败：\(repoURL)，原因：\(error.localizedDescription)")
             }
             fetchPrecision = Double(checkedCount) / Double(max(snapshot.count, 1))
+            reloadRecords()
         }
 
         reloadRecords()
-        statusMessage = "同步完成：检查 \(snapshot.count) 项，更新 \(updatedCount) 项。"
-        appendLog("同步完成：检查 \(snapshot.count) 项，更新 \(updatedCount) 项。")
+        statusMessage = "同步完成：检查 \(snapshot.count) 项，更新 \(updatedCount) 项，补录 \(importedCount) 项。"
+        appendLog("同步完成：检查 \(snapshot.count) 项，更新 \(updatedCount) 项，补录 \(importedCount) 项。")
     }
 
     private func syncRecordIfNeeded(_ record: RepoRecord) async throws -> Bool {
@@ -1008,7 +1042,7 @@ final class AppViewModel: ObservableObject {
 
         appendLog("检测到新版本：\(record.fullName) \(record.releaseTag) -> \(latestVersion)")
         try archiveOldVersionIfNeeded(record: record)
-        _ = try await importOne(url: record.sourceURL, retries: 1)
+        _ = try await importOne(url: record.sourceURL, retries: 1, allowExisting: true)
         return true
     }
 
@@ -1272,14 +1306,109 @@ final class AppViewModel: ObservableObject {
             }
         }
 
+        return uniqueRepoURLs(expanded)
+    }
+
+    private func resolveSyncRepoURLs() async -> [String] {
+        let recordURLs = records.compactMap { canonicalRepoURL(from: $0.sourceURL) }
+        rememberKnownURLs(recordURLs)
+
+        let seeds = uniqueKnownURLs(Array(knownURLs) + recordURLs)
+        guard !seeds.isEmpty else { return [] }
+
+        var collected: [String] = []
+        for raw in seeds {
+            if let username = URLParser.parseGitHubStarsUser(from: raw) {
+                appendLog("同步 stars：读取 \(username) 星标列表...")
+                do {
+                    let starred = try await github.fetchStarredRepoURLs(username: username, token: githubToken)
+                    let normalized = uniqueRepoURLs(starred)
+                    appendLog("同步 stars：\(username) 共 \(normalized.count) 项。")
+                    rememberKnownURLs(normalized)
+                    collected.append(contentsOf: normalized)
+                } catch {
+                    appendLog("同步 stars 失败：\(username)，原因：\(error.localizedDescription)")
+                }
+                continue
+            }
+            if let repoURL = canonicalRepoURL(from: raw) {
+                collected.append(repoURL)
+            }
+        }
+
+        let targets = uniqueRepoURLs(collected)
+        rememberKnownURLs(targets)
+        return targets
+    }
+
+    private func reloadKnownURLs() {
+        let fromDisk = (try? storage.loadKnownURLs(baseDir: activeBaseDir)) ?? []
+        let normalizedDisk = Set(fromDisk.compactMap { normalizedKnownURL($0) })
+
+        var merged = normalizedDisk
+        merged.formUnion(records.compactMap { canonicalRepoURL(from: $0.sourceURL) })
+        knownURLs = merged
+
+        if merged != normalizedDisk {
+            do {
+                try storage.saveKnownURLs(Array(merged).sorted(), baseDir: activeBaseDir)
+            } catch {
+                appendLog("保存已记录链接失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func rememberKnownURLs(_ urls: [String]) {
+        let normalized = uniqueKnownURLs(urls)
+        guard !normalized.isEmpty else { return }
+
+        let before = knownURLs
+        knownURLs.formUnion(normalized)
+        guard knownURLs != before else { return }
+
+        do {
+            try storage.saveKnownURLs(Array(knownURLs).sorted(), baseDir: activeBaseDir)
+        } catch {
+            appendLog("保存已记录链接失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func uniqueKnownURLs(_ urls: [String]) -> [String] {
         var seen = Set<String>()
         var unique: [String] = []
-        for url in expanded {
-            if !seen.contains(url) {
-                seen.insert(url)
-                unique.append(url)
+        for raw in urls {
+            guard let normalized = normalizedKnownURL(raw) else { continue }
+            if seen.insert(normalized).inserted {
+                unique.append(normalized)
             }
         }
         return unique
+    }
+
+    private func uniqueRepoURLs(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        var unique: [String] = []
+        for raw in urls {
+            guard let normalized = canonicalRepoURL(from: raw) else { continue }
+            if seen.insert(normalized).inserted {
+                unique.append(normalized)
+            }
+        }
+        return unique
+    }
+
+    private func normalizedKnownURL(_ raw: String) -> String? {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+
+        if let username = URLParser.parseGitHubStarsUser(from: cleaned) {
+            return "https://github.com/\(username)?tab=stars"
+        }
+        return canonicalRepoURL(from: cleaned)
+    }
+
+    private func canonicalRepoURL(from raw: String) -> String? {
+        guard let identity = try? URLParser.parseGitHubRepo(from: raw) else { return nil }
+        return "https://github.com/\(identity.owner)/\(identity.name)"
     }
 }

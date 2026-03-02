@@ -23,6 +23,10 @@ struct StorageService {
         baseDir.appendingPathComponent("ignored_ids.json")
     }
 
+    func knownURLsURL(baseDir: URL) -> URL {
+        baseDir.appendingPathComponent("known_urls.json")
+    }
+
     func prepareBaseIfNeeded(baseDir: URL) throws {
         try fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
     }
@@ -164,6 +168,24 @@ struct StorageService {
         let projectDir = self.projectDir(baseDir: baseDir, category: record.category, project: record.projectName)
         try removeDirectoryIfEmpty(projectDir)
         try removeDirectoryIfEmpty(projectDir.deletingLastPathComponent())
+    }
+
+    func loadKnownURLs(baseDir: URL) throws -> [String] {
+        try prepareBaseIfNeeded(baseDir: baseDir)
+        let url = knownURLsURL(baseDir: baseDir)
+        guard fm.fileExists(atPath: url.path) else { return [] }
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode([String].self, from: data)
+    }
+
+    func saveKnownURLs(_ urls: [String], baseDir: URL) throws {
+        try prepareBaseIfNeeded(baseDir: baseDir)
+        let cleaned = Array(Set(
+            urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )).sorted()
+        let data = try JSONEncoder.pretty.encode(cleaned)
+        try data.write(to: knownURLsURL(baseDir: baseDir), options: .atomic)
     }
 
     func loadRecords(baseDir: URL, macOnly: Bool = false) throws -> [RepoRecord] {
