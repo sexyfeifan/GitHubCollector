@@ -2,15 +2,14 @@ import Foundation
 
 extension AppViewModel {
     // Public entry
-    func reorganizeCategories() {
-        Task { @MainActor in
-            await runReorganizeCategories()
-        }
+    func startReorganizePreview() {
+        buildReorgPreview()
+        showReorgPreview = true
     }
 
     // Core logic
     @MainActor
-    func runReorganizeCategories() async {
+    func runReorganizeCategories(selectedIDs: Set<String>? = nil) async {
         errorMessage = ""
         isLoading = true
         defer { isLoading = false }
@@ -29,6 +28,7 @@ extension AppViewModel {
         var examined = 0
 
         for r in records {
+            if let set = selectedIDs, !set.contains(r.id) { continue }
             examined += 1
             let currentCat = (folderCategoryFromPaths(for: r, base: base) ?? r.category)
             let targetCat = computeTypeCategory(for: r)
@@ -94,6 +94,12 @@ extension AppViewModel {
 
     // Category resolver used by reorganizer
     func computeTypeCategory(for record: RepoRecord) -> String {
+        // rules override first
+        let base = StorageService().resolvedBaseDir(customPath: downloadRootPath)
+        if let cat = CategoryRulesLoader.shared.resolveCategory(for: record, baseDir: base), !cat.isEmpty {
+            return cat
+        }
+        // fallback to classifier
         let desc = record.descriptionEN.isEmpty ? record.descriptionZH : record.descriptionEN
         let lang: String? = (record.language == "Unknown") ? nil : record.language
         let url = URL(string: record.sourceURL) ?? URL(string: "https://github.com/\(record.fullName)")!
@@ -138,6 +144,31 @@ extension AppViewModel {
             }
         }
         return nil
+    }
+
+
+    private func buildReorgPreview() {
+        var items: [ReorgPreviewItem] = []
+        let base = StorageService().resolvedBaseDir(customPath: downloadRootPath)
+        for r in records {
+            let currentCat = (folderCategoryFromPaths(for: r, base: base) ?? r.category)
+            let targetCat = computeTypeCategory(for: r)
+            if currentCat == targetCat && currentCat != "有安装包项目" && currentCat != "无安装包项目" { continue }
+            items.append(ReorgPreviewItem(id: r.id, selected: true, name: r.projectName, currentCategory: currentCat, targetCategory: targetCat))
+        }
+        reorgPreviewItems = items
+    }
+
+    func setAllReorgPreviewItems(_ value: Bool) {
+        reorgPreviewItems = reorgPreviewItems.map { var it = $0; it.selected = value; return it }
+    }
+
+    func confirmReorganizeFromPreview() {
+        let ids = Set(reorgPreviewItems.filter { $0.selected }.map { $0.id })
+        showReorgPreview = false
+        Task { @MainActor in
+            await runReorganizeCategories(selectedIDs: ids)
+        }
     }
 }
 

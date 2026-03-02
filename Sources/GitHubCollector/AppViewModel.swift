@@ -93,6 +93,9 @@ final class AppViewModel: ObservableObject {
     @Published var minStars: Int = 0
     @Published var languageFilter: String = ""
     @Published var excludeForks: Bool = false
+    @Published var cardSize: CardSize = .medium
+
+    enum CardSize: String, CaseIterable { case small, medium, large }
 
     enum SortOption: String, CaseIterable { case recent, stars, name }
     var sortTitle: String { switch sortOption { case .recent: return "最近更新"; case .stars: return "Stars"; case .name: return "名称" } }
@@ -102,6 +105,17 @@ final class AppViewModel: ObservableObject {
     @Published var failedProjects: [FailedProject] = []
     @Published var fetchPrecision: Double = 0
     @Published var realtimeLogs: [String] = []
+
+    // Reorg preview
+    struct ReorgPreviewItem: Identifiable {
+        let id: String
+        var selected: Bool
+        let name: String
+        let currentCategory: String
+        let targetCategory: String
+    }
+    @Published var showReorgPreview: Bool = false
+    @Published var reorgPreviewItems: [ReorgPreviewItem] = []
     @Published var crawlState: CrawlState = .idle
     @Published var sessionTrafficBytes: Int64 = 0
     @Published var totalTrafficBytes: Int64 = 0

@@ -8,9 +8,15 @@ struct ContentView: View {
     @State private var showLogSheet = false
     @State private var showFailureSheet = false
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 340), spacing: 16)
-    ]
+    private var columns: [GridItem] {
+        let minWidth: CGFloat
+        switch vm.cardSize {
+        case .small: minWidth = 300
+        case .medium: minWidth = 360
+        case .large: minWidth = 420
+        }
+        return [GridItem(.adaptive(minimum: minWidth), spacing: 16)]
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,7 +58,9 @@ struct ContentView: View {
                                 openDetail: { detailRecord = record },
                                 deleteRecord: { deleteFiles in
                                     vm.deleteRecord(record, deleteFiles: deleteFiles)
-                                }
+                                },
+                                isSelected: detailRecord?.id == record.id,
+                                cardSize: vm.cardSize
                             )
                         }
                     }
@@ -129,6 +137,14 @@ struct ContentView: View {
             vm.ensureValidCategorySelection()
             vm.resetPageToFirst()
         }
+        .sheet(isPresented: $vm.showReorgPreview) {
+            ReorgPreviewView(items: $vm.reorgPreviewItems,
+                              onSelectAll: { vm.setAllReorgPreviewItems(true) },
+                              onSelectNone: { vm.setAllReorgPreviewItems(false) },
+                              onConfirm: { vm.confirmReorganizeFromPreview() },
+                              onCancel: { vm.showReorgPreview = false })
+            .frame(minWidth: 820, minHeight: 560)
+        }
         .animation(.easeInOut(duration: 0.2), value: showSettingsDrawer)
     }
 
@@ -177,6 +193,17 @@ struct ContentView: View {
                 Button("同步库") { vm.syncLibrary() }
                     .buttonStyle(.bordered)
                     .disabled(vm.isLoading)
+            }
+            HStack(spacing: 10) {
+                Text("卡片大小：").font(.caption).foregroundStyle(.secondary)
+                Picker("卡片大小", selection: $vm.cardSize) {
+                    Text("小").tag(AppViewModel.CardSize.small)
+                    Text("中").tag(AppViewModel.CardSize.medium)
+                    Text("大").tag(AppViewModel.CardSize.large)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                Spacer()
             }
 
             HStack(spacing: 8) {
@@ -456,11 +483,21 @@ struct ContentView: View {
                     vm.reloadRecords()
                 }
                 .buttonStyle(.bordered)
-                Button("整理分类") {
-                    vm.reorganizeCategories()
+                Button("整理分类") { vm.startReorganizePreview()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(vm.isLoading)
+            }
+            HStack(spacing: 10) {
+                Text("卡片大小：").font(.caption).foregroundStyle(.secondary)
+                Picker("卡片大小", selection: $vm.cardSize) {
+                    Text("小").tag(AppViewModel.CardSize.small)
+                    Text("中").tag(AppViewModel.CardSize.medium)
+                    Text("大").tag(AppViewModel.CardSize.large)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                Spacer()
             }
 
             if !vm.failedProjects.isEmpty {
@@ -554,15 +591,20 @@ private struct RepoCard: View {
     let retranslate: () -> Void
     let openDetail: () -> Void
     let deleteRecord: (Bool) -> Void
+    let isSelected: Bool
+    let cardSize: AppViewModel.CardSize
 
     @State private var showDeletePanel = false
     @State private var isHovering = false
+
+    private var titleFontSize: CGFloat { switch cardSize { case .small: return 16; case .medium: return 18; case .large: return 20 } }
+    private var cardHeight: CGFloat { switch cardSize { case .small: return 380; case .medium: return 420; case .large: return 460 } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(record.projectName)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: titleFontSize, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
                 Text(record.releaseTag)
@@ -627,7 +669,7 @@ private struct RepoCard: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 420, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(NSColor.controlBackgroundColor))
@@ -635,11 +677,11 @@ private struct RepoCard: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(isHovering ? Color.accentColor.opacity(0.6) : Color.gray.opacity(0.25), lineWidth: isHovering ? 2 : 1)
+                .stroke((isHovering || isSelected) ? Color.accentColor.opacity(0.7) : Color.gray.opacity(0.25), lineWidth: (isHovering || isSelected) ? 2 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture { openDetail() }
-        .onHover { hovering in isHovering = hovering }
+        .onHover { hovering in withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering } }
         .clipped()
     }
 }
@@ -1146,5 +1188,41 @@ private extension String {
             result = (result as NSString).replacingCharacters(in: m.range, with: replaced)
         }
         return result
+    }
+}
+
+
+private struct ReorgPreviewView: View {
+    @Binding var items: [AppViewModel.ReorgPreviewItem]
+    let onSelectAll: () -> Void
+    let onSelectNone: () -> Void
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("预览整理（\(items.count) 项）").font(.title3).bold()
+                Spacer()
+                Button("全选") { onSelectAll() }
+                Button("全不选") { onSelectNone() }
+                Button("取消") { onCancel() }.buttonStyle(.bordered)
+                Button("开始整理") { onConfirm() }.buttonStyle(.borderedProminent)
+            }
+            Table(items) {
+                TableColumn("选择") { item in
+                    Toggle("", isOn: binding(for: item).selected).labelsHidden()
+                }.width(50)
+                TableColumn("项目") { item in Text(item.name).lineLimit(1) }
+                TableColumn("当前分类") { item in Text(item.currentCategory).foregroundStyle(.secondary) }
+                TableColumn("目标分类") { item in Text(item.targetCategory).foregroundColor(.accentColor) }
+            }
+        }
+        .padding(16)
+    }
+
+    private func binding(for item: AppViewModel.ReorgPreviewItem) -> Binding<AppViewModel.ReorgPreviewItem> {
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return .constant(item) }
+        return $items[idx]
     }
 }
