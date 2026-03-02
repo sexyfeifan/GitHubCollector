@@ -601,6 +601,7 @@ final class AppViewModel: ObservableObject {
             retryCount = disk.retryCount
             includeNoPackageProjects = disk.includeNoPackageProjects
             categoryMode = CategoryMode(rawValue: disk.categoryModeRaw) ?? .packageOnly
+            onlyMacOSAssets = disk.onlyMacOSAssets
             appendLog("已从下载目录加载设置。")
         }
     }
