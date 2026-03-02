@@ -639,7 +639,7 @@ private struct RepoCard: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture { openDetail() }
-        .onHover { isHovering = /bin/zsh }
+        .onHover { hovering in isHovering = hovering }
         .clipped()
     }
 }
