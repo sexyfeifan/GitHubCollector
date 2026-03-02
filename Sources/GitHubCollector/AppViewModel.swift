@@ -160,7 +160,7 @@ final class AppViewModel: ObservableObject {
             let all = Set(records.map { $0.displayCategory })
             return ["全部", "有安装包项目", "无安装包项目"].filter { $0 == "全部" || all.contains($0) }
         }
-        let all = Set(records.map { $0.category })
+        let all = Set(records.map { categoryLabel(for: $0) })
         return ["全部"] + all.sorted()
     }
 
@@ -183,13 +183,48 @@ final class AppViewModel: ObservableObject {
     }
 
     func categoryLabel(for record: RepoRecord) -> String {
-        categoryMode == .packageOnly ? record.displayCategory : record.category
+        if categoryMode == .packageOnly {
+            return record.displayCategory
+        }
+        if let folder = folderCategory(for: record), !folder.isEmpty {
+            return folder
+        }
+        return record.category
     }
 
     func ensureValidCategorySelection() {
         if !categories.contains(selectedCategory) {
             selectedCategory = "全部"
         }
+    }
+
+    func countForCategory(_ category: String) -> Int {
+        if category == "全部" { return records.count }
+        return records.filter { categoryLabel(for: $0) == category }.count
+    }
+
+    private func folderCategory(for record: RepoRecord) -> String? {
+        let basePath = (record.storageRootPath.isEmpty ? activeBaseDir.path : record.storageRootPath)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !basePath.isEmpty else { return nil }
+
+        let candidates = [record.localPath, record.infoFilePath]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !candidates.isEmpty else { return nil }
+
+        let baseComponents = URL(fileURLWithPath: basePath).standardizedFileURL.pathComponents
+        for path in candidates {
+            let fileComponents = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+            guard fileComponents.count > baseComponents.count else { continue }
+            if Array(fileComponents.prefix(baseComponents.count)) == baseComponents {
+                let category = fileComponents[baseComponents.count]
+                if !category.isEmpty {
+                    return category
+                }
+            }
+        }
+        return nil
     }
 
     var pageSize: Int { 12 }

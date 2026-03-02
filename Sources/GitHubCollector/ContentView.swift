@@ -435,10 +435,16 @@ struct ContentView: View {
     private var categoryPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
+                Text("当前分类模式：\(vm.categoryMode.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            HStack {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(vm.categories, id: \.self) { c in
-                            Button(c) {
+                            Button("\(c) (\(vm.countForCategory(c)))") {
                                 vm.selectedCategory = c
                             }
                             .buttonStyle(.borderedProminent)
@@ -621,6 +627,7 @@ private struct RepoCard: View {
                 .fill(Color(NSColor.windowBackgroundColor))
                 .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
         )
+        .clipped()
     }
 }
 

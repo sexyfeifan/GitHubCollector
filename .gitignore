@@ -2,4 +2,6 @@
 .build/
 .clang-cache/
 .build-cache/
-dist/
+dist/*
+!dist/GitHubCollector.dmg
+_local_version_backups/
