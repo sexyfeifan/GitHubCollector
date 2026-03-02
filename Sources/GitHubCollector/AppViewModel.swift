@@ -224,7 +224,7 @@ final class AppViewModel: ObservableObject {
         return records.filter { categoryLabel(for: $0) == category }.count
     }
 
-    private func folderCategory(for record: RepoRecord) -> String? {
+    func folderCategory(for record: RepoRecord) -> String? {
         let basePath = (record.storageRootPath.isEmpty ? activeBaseDir.path : record.storageRootPath)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !basePath.isEmpty else { return nil }

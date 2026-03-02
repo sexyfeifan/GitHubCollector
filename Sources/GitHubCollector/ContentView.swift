@@ -456,6 +456,11 @@ struct ContentView: View {
                     vm.reloadRecords()
                 }
                 .buttonStyle(.bordered)
+                Button("整理分类") {
+                    vm.reorganizeCategories()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(vm.isLoading)
             }
 
             if !vm.failedProjects.isEmpty {
