@@ -623,8 +623,8 @@ private struct RepoCard: View {
                 .lineLimit(1)
 
             HStack {
-                Button(GitHub, action: openSource)
-                Button(打开目录, action: openFolder)
+                Button("GitHub", action: openSource)
+                Button("打开目录", action: openFolder)
             }
             .buttonStyle(.bordered)
 
