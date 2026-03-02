@@ -9,7 +9,7 @@ struct AppSettings {
     var retryCount: Int = 2
     var downloadRootPath: String = ""
     var includeNoPackageProjects: Bool = true
-    var categoryModeRaw: String = "packageOnly"
+    var categoryModeRaw: String = "typeBased"
     var onlyMacOSAssets: Bool = false
 }
 
@@ -68,7 +68,7 @@ struct SettingsStore {
         } else {
             s.includeNoPackageProjects = ud.bool(forKey: Keys.includeNoPackageProjects)
         }
-        s.categoryModeRaw = ud.string(forKey: Keys.categoryModeRaw) ?? "packageOnly"
+        s.categoryModeRaw = ud.string(forKey: Keys.categoryModeRaw) ?? "typeBased"
         s.onlyMacOSAssets = ud.bool(forKey: Keys.onlyMacOSAssets)
         return s
     }
@@ -125,7 +125,7 @@ struct SettingsStore {
                 retryCount: max(1, min(payload.retryCount, 5)),
                 downloadRootPath: baseDir.path,
                 includeNoPackageProjects: payload.includeNoPackageProjects,
-                categoryModeRaw: payload.categoryModeRaw ?? "packageOnly",
+                categoryModeRaw: payload.categoryModeRaw ?? "typeBased",
                 onlyMacOSAssets: payload.onlyMacOSAssets ?? false
             )
         } catch {

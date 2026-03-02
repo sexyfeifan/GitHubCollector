@@ -87,7 +87,7 @@ final class AppViewModel: ObservableObject {
     @Published var retryCount: Int = 2
     @Published var downloadRootPath: String = ""
     @Published var includeNoPackageProjects: Bool = true
-    @Published var categoryMode: CategoryMode = .packageOnly
+    @Published var categoryMode: CategoryMode = .typeBased
     @Published var onlyMacOSAssets: Bool = false
     @Published var sortOption: SortOption = .recent
     @Published var minStars: Int = 0
@@ -149,7 +149,7 @@ final class AppViewModel: ObservableObject {
         retryCount = s.retryCount
         downloadRootPath = s.downloadRootPath
         includeNoPackageProjects = s.includeNoPackageProjects
-        categoryMode = CategoryMode(rawValue: s.categoryModeRaw) ?? .packageOnly
+        categoryMode = CategoryMode(rawValue: s.categoryModeRaw) ?? .typeBased
         onlyMacOSAssets = s.onlyMacOSAssets
         loadSettingsFromSelectedDirectoryIfAvailable()
         totalTrafficBytes = settings.loadTotalTrafficBytes()
@@ -178,15 +178,28 @@ final class AppViewModel: ObservableObject {
 
     var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
 
-    var categories: [String] {
-        if categoryMode == .packageOnly {
-            let all = Set(records.map { $0.displayCategory })
-            return ["全部", "有安装包项目", "无安装包项目"].filter { $0 == "全部" || all.contains($0) }
-        }
-        let all = Set(records.map { categoryLabel(for: $0) })
-        return ["全部"] + all.sorted()
-    }
 
+    var categories: [String] {
+        // 以下载目录的一级文件夹为准，保证与磁盘结构对齐
+        let base = activeBaseDir
+        var set = Set<String>()
+        if let urls = try? FileManager.default.contentsOfDirectory(
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for u in urls {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                    set.insert(u.lastPathComponent)
+                }
+            }
+        }
+        if set.isEmpty {
+            set = Set(records.map { r in categoryLabel(for: r) })
+        }
+        return ["全部"] + Array(set).sorted()
+    }
     var filteredRecords: [RepoRecord] {
         var categoryFiltered: [RepoRecord]
         if selectedCategory == "全部" {
@@ -216,11 +229,7 @@ final class AppViewModel: ObservableObject {
         case .name: return categoryFiltered.sorted { $0.projectName.lowercased() < $1.projectName.lowercased() }
         }
     }
-
     func categoryLabel(for record: RepoRecord) -> String {
-        if categoryMode == .packageOnly {
-            return record.displayCategory
-        }
         if let folder = folderCategory(for: record), !folder.isEmpty {
             return folder
         }
@@ -614,7 +623,7 @@ final class AppViewModel: ObservableObject {
             openAIModel = disk.openAIModel
             retryCount = disk.retryCount
             includeNoPackageProjects = disk.includeNoPackageProjects
-            categoryMode = CategoryMode(rawValue: disk.categoryModeRaw) ?? .packageOnly
+            categoryMode = CategoryMode(rawValue: disk.categoryModeRaw) ?? .typeBased
             onlyMacOSAssets = disk.onlyMacOSAssets
             appendLog("已从下载目录加载设置。")
         }
@@ -871,11 +880,7 @@ final class AppViewModel: ObservableObject {
         let previewImagePath: String
 
         if let asset = selectedAsset {
-            if categoryMode == .packageOnly {
-                category = "有安装包项目"
-            } else {
-                category = classifier.classify(repo: fetchedRepo, text: englishDescription)
-            }
+            category = classifier.classify(repo: fetchedRepo, text: englishDescription)
             releaseTag = resolveVersion(from: asset.name, fallback: fetchedRelease?.tagName ?? "N/A")
             releaseAssetName = asset.name
             releaseAssetURL = asset.browserDownloadURL.absoluteString
@@ -894,12 +899,12 @@ final class AppViewModel: ObservableObject {
             guard includeNoPackageProjects else {
                 throw ImportError.noDownloadAssetSkipped
             }
-            category = "无安装包项目"
-            releaseTag = fetchedRelease?.tagName ?? "N/A"
-            releaseAssetName = "无安装包"
-            releaseAssetURL = ""
+            category = classifier.classify(repo: fetchedRepo, text: englishDescription)
+            releaseTag = fetchedRelease?.tagName ?? N/A
+            releaseAssetName = 无安装包
+            releaseAssetURL = 
             hasDownloadAsset = false
-            localPath = ""
+            localPath = 
             projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         }
 

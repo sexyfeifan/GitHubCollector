@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WebKit
 
 struct ContentView: View {
@@ -103,6 +104,8 @@ struct ContentView: View {
                 detailRecord = nil
             } formatOffline: {
                 vm.formatRecordOffline(record)
+            } retranslate: {
+                vm.retranslateRecord(record)
             }
             .frame(minWidth: 1040, minHeight: 760)
         }
@@ -374,17 +377,6 @@ struct ContentView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("项目分类模式")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("项目分类模式", selection: $vm.categoryMode) {
-                    ForEach(AppViewModel.CategoryMode.allCases, id: \.rawValue) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("软件下载路径")
@@ -417,8 +409,6 @@ struct ContentView: View {
 
             Spacer()
         }
-        .padding(12)
-    }
 
     private var queuePanel: some View {
         GroupBox("任务队列") {
@@ -462,7 +452,7 @@ struct ContentView: View {
     private var categoryPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("当前分类模式：\(vm.categoryMode.title)")
+                Text("当前分类")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -598,7 +588,7 @@ private struct RepoCard: View {
     @State private var isHovering = false
 
     private var titleFontSize: CGFloat { switch cardSize { case .small: return 16; case .medium: return 18; case .large: return 20 } }
-    private var cardHeight: CGFloat { switch cardSize { case .small: return 380; case .medium: return 420; case .large: return 460 } }
+    private var cardHeight: CGFloat { switch cardSize { case .small: return 340; case .medium: return 380; case .large: return 420 } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -620,11 +610,6 @@ private struct RepoCard: View {
                 .font(.subheadline)
                 .lineLimit(2)
 
-            LocalPreviewImage(path: record.previewImagePath)
-                .frame(maxWidth: .infinity)
-                .frame(height: 120)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
                 Label(categoryText, systemImage: "square.grid.2x2")
@@ -639,11 +624,8 @@ private struct RepoCard: View {
                 .lineLimit(1)
 
             HStack {
-                Button("详情窗口", action: openDetail)
-                Button("GitHub", action: openSource)
-                Button("打开目录", action: openFolder)
-                Button(record.hasDownloadAsset ? "安装/解压" : "查看简介", action: openInstaller)
-                Button("重新翻译", action: retranslate)
+                Button(GitHub, action: openSource)
+                Button(打开目录, action: openFolder)
             }
             .buttonStyle(.bordered)
 
@@ -680,7 +662,7 @@ private struct RepoCard: View {
                 .stroke((isHovering || isSelected) ? Color.accentColor.opacity(0.7) : Color.gray.opacity(0.25), lineWidth: (isHovering || isSelected) ? 2 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture { openDetail() }
+        .onTapGesture(count: 2) { openDetail() }
         .onHover { hovering in withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering } }
         .clipped()
     }
@@ -695,6 +677,7 @@ private struct RepoDetailView: View {
     @State private var showZHReleaseNotes = false
     @State private var showFormattedZH = false
     @State private var showSetupGuide = false
+    let retranslate: () -> Void
     @State private var showENDescription = false
     @State private var showENReleaseNotes = false
 
@@ -713,10 +696,6 @@ private struct RepoDetailView: View {
                     Text("版本：\(record.releaseTag)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("离线排版") {
-                        formatOffline()
-                    }
-                    .buttonStyle(.bordered)
                     Button("关闭") {
                         onClose()
                     }
@@ -742,12 +721,28 @@ private struct RepoDetailView: View {
                 Spacer()
             }
 
-            if let sourceURL = URL(string: record.sourceURL), !record.sourceURL.isEmpty {
-                Link(destination: sourceURL) {
-                    Label("打开 GitHub 项目页", systemImage: "link")
+            // 标题下方排列操作：GitHub / 打开目录 / 重新翻译 / 离线排版
+            HStack(spacing: 10) {
+                Button(GitHub) {
+                    if let url = URL(string: record.sourceURL), !record.sourceURL.isEmpty {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
-                .font(.caption)
+                .buttonStyle(.bordered)
+                Button(打开目录) {
+                    if !record.localPath.isEmpty {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.localPath)])
+                    } else if !record.infoFilePath.isEmpty {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.infoFilePath)])
+                    }
+                }
+                .buttonStyle(.bordered)
+                Button("重新翻译") { retranslate() }
+                .buttonStyle(.bordered)
+                Button("离线排版") { formatOffline() }
+                .buttonStyle(.bordered)
             }
+            .padding(.bottom, 6)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
