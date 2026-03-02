@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="GitHubCollector"
+VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed s/^v//)}"
+[ -z "$VERSION" ] && VERSION="1.0.0"
+BUILD="${2:-$(date +%Y%m%d%H%M)}"
+
 APP_BUNDLE="$ROOT_DIR/dist/${APP_NAME}.app"
 BIN_PATH="$ROOT_DIR/.build/release/${APP_NAME}"
 DMG_PATH="$ROOT_DIR/dist/${APP_NAME}.dmg"
@@ -34,8 +38,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>CFBundleName</key><string>${APP_NAME}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.10</string>
-<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleShortVersionString</key><string>${VERSION}</string>
+<key>CFBundleVersion</key><string>${BUILD}</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleIconName</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
