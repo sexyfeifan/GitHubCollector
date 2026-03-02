@@ -900,11 +900,11 @@ final class AppViewModel: ObservableObject {
                 throw ImportError.noDownloadAssetSkipped
             }
             category = classifier.classify(repo: fetchedRepo, text: englishDescription)
-            releaseTag = fetchedRelease?.tagName ?? N/A
-            releaseAssetName = 无安装包
-            releaseAssetURL = 
+            releaseTag = fetchedRelease?.tagName ?? "N/A"
+            releaseAssetName = "无安装包"
+            releaseAssetURL = ""
             hasDownloadAsset = false
-            localPath = 
+            localPath = ""
             projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         }
 

@@ -398,8 +398,6 @@ struct ContentView: View {
                     .lineLimit(2)
             }
 
-            Toggle("纳入无安装包项目", isOn: $vm.includeNoPackageProjects)
-                .toggleStyle(.switch)
 
             HStack {
                 Spacer()
@@ -409,7 +407,8 @@ struct ContentView: View {
 
             Spacer()
         }
-
+        .padding(12)
+    }
     private var queuePanel: some View {
         GroupBox("任务队列") {
             ScrollView {
@@ -723,13 +722,13 @@ private struct RepoDetailView: View {
 
             // 标题下方排列操作：GitHub / 打开目录 / 重新翻译 / 离线排版
             HStack(spacing: 10) {
-                Button(GitHub) {
+                Button("GitHub") {
                     if let url = URL(string: record.sourceURL), !record.sourceURL.isEmpty {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 .buttonStyle(.bordered)
-                Button(打开目录) {
+                Button("打开目录") {
                     if !record.localPath.isEmpty {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.localPath)])
                     } else if !record.infoFilePath.isEmpty {
