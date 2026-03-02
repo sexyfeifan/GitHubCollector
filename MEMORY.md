@@ -1,7 +1,7 @@
 # GitHubCollector 快速记忆卡（Memory）
 
 位置与目标
-- 主路径：/Users/sexyfeifan/Documents/New project
+- 主路径：/Users/sexyfeifan/Documents/Codex/GitHubCollector
 - 仓库：origin = https://github.com/sexyfeifan/GitHubCollector.git（分支：master）
 - 目标：批量收集 GitHub 项目，下载最新 Release 安装包，形成本地可搜索的软件库（macOS 13+，SwiftUI）
 
