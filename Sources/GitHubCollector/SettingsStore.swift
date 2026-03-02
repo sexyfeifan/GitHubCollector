@@ -1,6 +1,7 @@
 import Foundation
 
 struct AppSettings {
+    // Tokens are persisted in Keychain; these fields carry in-memory values
     var githubToken: String = ""
     var openAIKey: String = ""
     var openAIBaseURL: String = "https://api.openai.com/v1"
@@ -9,6 +10,7 @@ struct AppSettings {
     var downloadRootPath: String = ""
     var includeNoPackageProjects: Bool = true
     var categoryModeRaw: String = "packageOnly"
+    var onlyMacOSAssets: Bool = false
 }
 
 struct SettingsStore {
@@ -22,6 +24,7 @@ struct SettingsStore {
         var categoryModeRaw: String?
         var openAITotalPromptTokens: Int?
         var openAITotalCompletionTokens: Int?
+        var onlyMacOSAssets: Bool?
     }
 
     private enum Keys {
@@ -36,6 +39,7 @@ struct SettingsStore {
         static let totalTrafficBytes = "metrics.total_traffic_bytes"
         static let openAITotalPromptTokens = "metrics.openai.prompt_tokens"
         static let openAITotalCompletionTokens = "metrics.openai.completion_tokens"
+        static let onlyMacOSAssets = "settings.only_macos_assets"
     }
 
     private let ud = UserDefaults.standard
@@ -43,8 +47,17 @@ struct SettingsStore {
 
     func load() -> AppSettings {
         var s = AppSettings()
-        s.githubToken = ud.string(forKey: Keys.githubToken) ?? ""
-        s.openAIKey = ud.string(forKey: Keys.openAIKey) ?? ""
+        // Migrate tokens from UserDefaults to Keychain (one-time)
+        if let oldGH = ud.string(forKey: Keys.githubToken), !oldGH.isEmpty {
+            KeychainStore.set(oldGH, for: Keys.githubToken)
+            ud.removeObject(forKey: Keys.githubToken)
+        }
+        if let oldAI = ud.string(forKey: Keys.openAIKey), !oldAI.isEmpty {
+            KeychainStore.set(oldAI, for: Keys.openAIKey)
+            ud.removeObject(forKey: Keys.openAIKey)
+        }
+        s.githubToken = KeychainStore.get(Keys.githubToken)
+        s.openAIKey = KeychainStore.get(Keys.openAIKey)
         s.openAIBaseURL = ud.string(forKey: Keys.openAIBaseURL) ?? s.openAIBaseURL
         s.openAIModel = ud.string(forKey: Keys.openAIModel) ?? s.openAIModel
         let retry = ud.integer(forKey: Keys.retryCount)
@@ -56,18 +69,21 @@ struct SettingsStore {
             s.includeNoPackageProjects = ud.bool(forKey: Keys.includeNoPackageProjects)
         }
         s.categoryModeRaw = ud.string(forKey: Keys.categoryModeRaw) ?? "packageOnly"
+        s.onlyMacOSAssets = ud.bool(forKey: Keys.onlyMacOSAssets)
         return s
     }
 
     func save(_ settings: AppSettings) {
-        ud.set(settings.githubToken, forKey: Keys.githubToken)
-        ud.set(settings.openAIKey, forKey: Keys.openAIKey)
+        // Save tokens into Keychain only
+        KeychainStore.set(settings.githubToken, for: Keys.githubToken)
+        KeychainStore.set(settings.openAIKey, for: Keys.openAIKey)
         ud.set(settings.openAIBaseURL, forKey: Keys.openAIBaseURL)
         ud.set(settings.openAIModel, forKey: Keys.openAIModel)
         ud.set(max(1, min(settings.retryCount, 5)), forKey: Keys.retryCount)
         ud.set(settings.downloadRootPath, forKey: Keys.downloadRootPath)
         ud.set(settings.includeNoPackageProjects, forKey: Keys.includeNoPackageProjects)
         ud.set(settings.categoryModeRaw, forKey: Keys.categoryModeRaw)
+        ud.set(settings.onlyMacOSAssets, forKey: Keys.onlyMacOSAssets)
     }
 
     func saveToDirectory(_ settings: AppSettings, baseDir: URL) throws {
@@ -81,7 +97,8 @@ struct SettingsStore {
             includeNoPackageProjects: settings.includeNoPackageProjects,
             categoryModeRaw: settings.categoryModeRaw,
             openAITotalPromptTokens: loadOpenAITotalPromptTokens(),
-            openAITotalCompletionTokens: loadOpenAITotalCompletionTokens()
+            openAITotalCompletionTokens: loadOpenAITotalCompletionTokens(),
+            onlyMacOSAssets: settings.onlyMacOSAssets
         )
         let data = try makePrettyEncoder().encode(payload)
         try data.write(to: settingsFileURL(baseDir: baseDir), options: .atomic)
@@ -97,6 +114,9 @@ struct SettingsStore {
                 prompt: payload.openAITotalPromptTokens ?? 0,
                 completion: payload.openAITotalCompletionTokens ?? 0
             )
+            // Also hydrate tokens into Keychain for this directory profile
+            if !payload.githubToken.isEmpty { KeychainStore.set(payload.githubToken, for: Keys.githubToken) }
+            if !payload.openAIKey.isEmpty { KeychainStore.set(payload.openAIKey, for: Keys.openAIKey) }
             return AppSettings(
                 githubToken: payload.githubToken,
                 openAIKey: payload.openAIKey,
@@ -105,7 +125,8 @@ struct SettingsStore {
                 retryCount: max(1, min(payload.retryCount, 5)),
                 downloadRootPath: baseDir.path,
                 includeNoPackageProjects: payload.includeNoPackageProjects,
-                categoryModeRaw: payload.categoryModeRaw ?? "packageOnly"
+                categoryModeRaw: payload.categoryModeRaw ?? "packageOnly",
+                onlyMacOSAssets: payload.onlyMacOSAssets ?? false
             )
         } catch {
             return nil

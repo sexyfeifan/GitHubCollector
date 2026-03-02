@@ -101,6 +101,7 @@ struct StorageService {
             category: draft.category,
             language: draft.language,
             stars: draft.stars,
+            isFork: draft.isFork,
             releaseTag: draft.releaseTag,
             releaseAssetName: draft.releaseAssetName,
             releaseAssetURL: draft.releaseAssetURL,
@@ -165,7 +166,7 @@ struct StorageService {
         try removeDirectoryIfEmpty(projectDir.deletingLastPathComponent())
     }
 
-    func loadRecords(baseDir: URL) throws -> [RepoRecord] {
+    func loadRecords(baseDir: URL, macOnly: Bool = false) throws -> [RepoRecord] {
         try prepareBaseIfNeeded(baseDir: baseDir)
 
         let db = dbURL(baseDir: baseDir)
@@ -178,7 +179,7 @@ struct StorageService {
         }
 
         let fromInfoFiles = try scanInfoFiles(baseDir: baseDir)
-        let inferred = try inferRecordsFromPackages(baseDir: baseDir)
+        let inferred = try inferRecordsFromPackages(baseDir: baseDir, macOnly: macOnly)
         let ignored = try loadIgnoredIDs(baseDir: baseDir)
 
         var merged: [String: RepoRecord] = [:]
@@ -288,7 +289,7 @@ struct StorageService {
         return records
     }
 
-    private func inferRecordsFromPackages(baseDir: URL) throws -> [RepoRecord] {
+    private func inferRecordsFromPackages(baseDir: URL, macOnly: Bool) throws -> [RepoRecord] {
         guard let enumerator = fm.enumerator(
             at: baseDir,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
@@ -307,7 +308,10 @@ struct StorageService {
         for case let fileURL as URL in enumerator {
             let lower = fileURL.lastPathComponent.lowercased()
             guard validSuffixes.contains(where: { lower.hasSuffix($0) }) else { continue }
-            if lower.hasSuffix(".zip") {
+            if macOnly {
+                let macOK = lower.hasSuffix(".dmg") || lower.hasSuffix(".pkg") || lower.hasSuffix(".mpkg") || lower.hasSuffix(".app") || lower.hasSuffix(".app.zip") || (lower.hasSuffix(".zip") && (lower.contains("mac") || lower.contains("darwin") || lower.contains("osx") || lower.contains("app")))
+                if !macOK { continue }
+            } else if lower.hasSuffix(".zip") {
                 let zipLikeInstall = lower.contains("app") || lower.contains("mac") || lower.contains("darwin") ||
                     lower.contains("osx") || lower.contains("ios") || lower.contains("iphone") ||
                     lower.contains("ipad") || lower.contains("android")
@@ -339,6 +343,7 @@ struct StorageService {
                 category: category,
                 language: "Unknown",
                 stars: 0,
+                isFork: false,
                 releaseTag: "Unknown",
                 releaseAssetName: fileURL.lastPathComponent,
                 releaseAssetURL: "",

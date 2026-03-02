@@ -24,6 +24,7 @@ struct GitHubRepo: Decodable {
     let updatedAt: String?
     let archived: Bool?
     let disabled: Bool?
+    let fork: Bool?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -36,6 +37,7 @@ struct GitHubRepo: Decodable {
         case updatedAt = "updated_at"
         case archived
         case disabled
+        case fork
     }
 }
 
@@ -86,6 +88,7 @@ struct RepoRecord: Codable, Identifiable {
     var category: String
     var language: String
     var stars: Int
+    var isFork: Bool
 
     var releaseTag: String
     var releaseAssetName: String
@@ -118,6 +121,7 @@ struct RepoRecord: Codable, Identifiable {
         category: String,
         language: String,
         stars: Int,
+        isFork: Bool,
         releaseTag: String,
         releaseAssetName: String,
         releaseAssetURL: String,
@@ -143,6 +147,7 @@ struct RepoRecord: Codable, Identifiable {
         self.category = category
         self.language = language
         self.stars = stars
+        self.isFork = isFork
         self.releaseTag = releaseTag
         self.releaseAssetName = releaseAssetName
         self.releaseAssetURL = releaseAssetURL
@@ -158,7 +163,7 @@ struct RepoRecord: Codable, Identifiable {
         case id, owner, repo, projectName, sourceURL
         case descriptionEN, descriptionZH, summaryZH
         case releaseNotesEN, releaseNotesZH, setupGuideEN, formattedZH
-        case category, language, stars
+        case category, language, stars, isFork
         case releaseTag, releaseAssetName, releaseAssetURL
         case hasDownloadAsset, localPath, previewImagePath, storageRootPath, infoFilePath
         case updatedAt
@@ -185,6 +190,7 @@ struct RepoRecord: Codable, Identifiable {
         category = try c.decodeIfPresent(String.self, forKey: .category) ?? "未分类"
         language = try c.decodeIfPresent(String.self, forKey: .language) ?? "Unknown"
         stars = try c.decodeIfPresent(Int.self, forKey: .stars) ?? 0
+        isFork = try c.decodeIfPresent(Bool.self, forKey: .isFork) ?? false
 
         releaseTag = try c.decodeIfPresent(String.self, forKey: .releaseTag) ?? "N/A"
         releaseAssetName = try c.decodeIfPresent(String.self, forKey: .releaseAssetName) ?? "无安装包"
@@ -217,6 +223,7 @@ struct RepoDraft {
     let category: String
     let language: String
     let stars: Int
+    let isFork: Bool
 
     let releaseTag: String
     let releaseAssetName: String

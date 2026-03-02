@@ -88,6 +88,14 @@ final class AppViewModel: ObservableObject {
     @Published var downloadRootPath: String = ""
     @Published var includeNoPackageProjects: Bool = true
     @Published var categoryMode: CategoryMode = .packageOnly
+    @Published var onlyMacOSAssets: Bool = false
+    @Published var sortOption: SortOption = .recent
+    @Published var minStars: Int = 0
+    @Published var languageFilter: String = ""
+    @Published var excludeForks: Bool = false
+
+    enum SortOption: String, CaseIterable { case recent, stars, name }
+    var sortTitle: String { switch sortOption { case .recent: return "最近更新"; case .stars: return "Stars"; case .name: return "名称" } }
 
     @Published var queueItems: [QueueItem] = []
     @Published var failedURLs: [String] = []
@@ -128,6 +136,7 @@ final class AppViewModel: ObservableObject {
         downloadRootPath = s.downloadRootPath
         includeNoPackageProjects = s.includeNoPackageProjects
         categoryMode = CategoryMode(rawValue: s.categoryModeRaw) ?? .packageOnly
+        onlyMacOSAssets = s.onlyMacOSAssets
         loadSettingsFromSelectedDirectoryIfAvailable()
         totalTrafficBytes = settings.loadTotalTrafficBytes()
         openAIPromptTokens = settings.loadOpenAITotalPromptTokens()
@@ -165,7 +174,7 @@ final class AppViewModel: ObservableObject {
     }
 
     var filteredRecords: [RepoRecord] {
-        let categoryFiltered: [RepoRecord]
+        var categoryFiltered: [RepoRecord]
         if selectedCategory == "全部" {
             categoryFiltered = records
         } else {
@@ -173,12 +182,24 @@ final class AppViewModel: ObservableObject {
         }
 
         let key = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !key.isEmpty else { return categoryFiltered }
-        return categoryFiltered.filter { r in
-            r.projectName.lowercased().contains(key) ||
-            r.fullName.lowercased().contains(key) ||
-            categoryLabel(for: r).lowercased().contains(key) ||
-            r.summaryZH.lowercased().contains(key)
+        if !key.isEmpty {
+            categoryFiltered = categoryFiltered.filter { r in
+                r.projectName.lowercased().contains(key) ||
+                r.fullName.lowercased().contains(key) ||
+                categoryLabel(for: r).lowercased().contains(key) ||
+                r.summaryZH.lowercased().contains(key)
+            }
+        }
+        if minStars > 0 { categoryFiltered = categoryFiltered.filter { $0.stars >= minStars } }
+        if !languageFilter.trimmingCharacters(in: .whitespaces).isEmpty {
+            let l = languageFilter.lowercased()
+            categoryFiltered = categoryFiltered.filter { $0.language.lowercased().contains(l) }
+        }
+        if excludeForks { categoryFiltered = categoryFiltered.filter { !$0.isFork } }
+        switch sortOption {
+        case .recent: return categoryFiltered.sorted { $0.updatedAt > $1.updatedAt }
+        case .stars: return categoryFiltered.sorted { $0.stars > $1.stars }
+        case .name: return categoryFiltered.sorted { $0.projectName.lowercased() < $1.projectName.lowercased() }
         }
     }
 
@@ -529,7 +550,7 @@ final class AppViewModel: ObservableObject {
 
     func reloadRecords() {
         do {
-            let records = try storage.loadRecords(baseDir: activeBaseDir)
+            let records = try storage.loadRecords(baseDir: activeBaseDir, macOnly: onlyMacOSAssets)
             self.records = records
             self.knownRecordIDs = Set(records.map { $0.id })
             ensureValidCategorySelection()
@@ -822,7 +843,7 @@ final class AppViewModel: ObservableObject {
             fallbackTitle: fetchedRepo.name
         )
 
-        let selectedAsset = fetchedRelease.flatMap { github.selectBestAsset(from: $0.assets) }
+        let selectedAsset = fetchedRelease.flatMap { github.selectBestAsset(from: $0.assets, onlyMacOS: onlyMacOSAssets) }
 
         let category: String
         let hasDownloadAsset: Bool
@@ -895,6 +916,7 @@ final class AppViewModel: ObservableObject {
             category: category,
             language: fetchedRepo.language ?? "Unknown",
             stars: fetchedRepo.stargazersCount,
+            isFork: fetchedRepo.fork ?? false,
             releaseTag: releaseTag,
             releaseAssetName: releaseAssetName,
             releaseAssetURL: releaseAssetURL,
@@ -945,7 +967,7 @@ final class AppViewModel: ObservableObject {
         let latestRelease = try await github.fetchLatestRelease(identity, token: githubToken)
         guard
             let release = latestRelease,
-            let latestAsset = github.selectBestAsset(from: release.assets)
+            let latestAsset = github.selectBestAsset(from: release.assets, onlyMacOS: onlyMacOSAssets)
         else {
             return false
         }

@@ -34,12 +34,18 @@ struct GitHubService {
         let d = JSONDecoder()
         return d
     }()
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 60
+        return URLSession(configuration: cfg)
+    }()
 
     func fetchRepo(_ identity: RepoIdentity, token: String) async throws -> GitHubRepo {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)")!
         let request = makeRequest(url: url, token: token)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw GitHubServiceError.invalidResponse
         }
@@ -60,7 +66,7 @@ struct GitHubService {
         do {
             let url = URL(string: "https://raw.githubusercontent.com/\(identity.owner)/\(identity.name)/HEAD/README.md")!
             let request = makeRequest(url: url, token: token)
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 return ""
             }
@@ -74,7 +80,7 @@ struct GitHubService {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/releases/latest")!
         let request = makeRequest(url: url, token: token)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw GitHubServiceError.invalidResponse }
 
         if http.statusCode == 404 {
@@ -91,10 +97,10 @@ struct GitHubService {
         return try decoder.decode(GitHubRelease.self, from: data)
     }
 
-    func selectBestAsset(from assets: [GitHubAsset]) -> GitHubAsset? {
+    func selectBestAsset(from assets: [GitHubAsset], onlyMacOS: Bool = false) -> GitHubAsset? {
         let scored = assets.map { asset -> (GitHubAsset, Int) in
             let name = asset.name.lowercased()
-            guard isInstallableAsset(name) else { return (asset, -1000) }
+            guard isInstallableAsset(name, onlyMacOS: onlyMacOS) else { return (asset, -1000) }
 
             var score = 20
             if name.hasSuffix(".dmg") { score = 120 }
@@ -119,13 +125,17 @@ struct GitHubService {
         return scored.max(by: { $0.1 < $1.1 }).flatMap { $0.1 >= 0 ? $0.0 : nil }
     }
 
-    private func isInstallableAsset(_ name: String) -> Bool {
+    private func isInstallableAsset(_ name: String, onlyMacOS: Bool) -> Bool {
         let suffixes = [
             ".dmg", ".pkg", ".mpkg", ".app", ".app.zip",
             ".ipa", ".apk", ".xapk", ".apks", ".aab",
             ".zip"
         ]
         guard suffixes.contains(where: { name.hasSuffix($0) }) else { return false }
+        if onlyMacOS {
+            let macOK = name.hasSuffix(".dmg") || name.hasSuffix(".pkg") || name.hasSuffix(".mpkg") || name.hasSuffix(".app") || name.hasSuffix(".app.zip") || (name.hasSuffix(".zip") && (name.contains("mac") || name.contains("darwin") || name.contains("osx") || name.contains("app")))
+            return macOK
+        }
         if name.hasSuffix(".zip") {
             return name.contains("app") || name.contains("mac") || name.contains("darwin") || name.contains("osx") ||
                 name.contains("ios") || name.contains("iphone") || name.contains("ipad") || name.contains("android")
@@ -140,7 +150,7 @@ struct GitHubService {
             let url = URL(string: "https://api.github.com/users/\(username)/starred?per_page=100&page=\(page)")!
             let request = makeRequest(url: url, token: token)
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw GitHubServiceError.invalidResponse
             }
@@ -184,3 +194,9 @@ struct GitHubService {
         return Date(timeIntervalSince1970: ts)
     }
 }
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 60
+        return URLSession(configuration: cfg)
+    }()
