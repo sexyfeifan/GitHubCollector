@@ -2,6 +2,14 @@
 
 GitHubCollector 是一个 macOS 桌面工具，用于批量收集 GitHub 项目、自动下载最新 Release 安装包，并在本地形成可搜索的软件库。
 
+## 1.0.12 更新
+
+- Token 入钥匙串：GitHub Token / OpenAI Key 迁移并保存在系统钥匙串中（更安全），旧版会自动迁移；
+- 仅 macOS 安装包：新增“仅 macOS 资产”过滤开关（设置页/首页），扫描与下载都将只匹配 ；
+- 列表筛选与排序：按更新时间/Star 数/名称排序，支持最小 Star、语言过滤、排除 Fork；
+- 限流与超时：请求默认超时，命中 GitHub 限流时会提示重置时间，便于重试；
+- 可靠性：本地记录加载与目录扫描对 macOS-only 过滤生效，资产选择策略与安装包识别更稳健。
+
 ## 主要功能
 
 - 识别并抓取 GitHub 仓库链接：`https://github.com/<owner>/<repo>`

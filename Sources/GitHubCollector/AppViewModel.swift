@@ -579,7 +579,8 @@ final class AppViewModel: ObservableObject {
             retryCount: retryCount,
             downloadRootPath: downloadRootPath,
             includeNoPackageProjects: includeNoPackageProjects,
-            categoryModeRaw: categoryMode.rawValue
+            categoryModeRaw: categoryMode.rawValue,
+            onlyMacOSAssets: onlyMacOSAssets
         )
     }
 
