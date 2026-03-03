@@ -70,12 +70,21 @@ swift --version
 以后发布统一使用 DMG 安装包：
 
 ```bash
+# 0) 启用推送前明文 token 扫描（仅需执行一次）
+git config core.hooksPath .githooks
+
 # 1) 仅本地构建 DMG + 源码包
 ./scripts/build_dmg.sh
 
 # 2) 构建并发布到 GitHub Release（资产固定为 GitHubCollector.dmg）
 export GITHUB_TOKEN=你的GitHubToken
 ./scripts/publish_release.sh v1.0.21 sexyfeifan GitHubCollector
+```
+
+也可以手动扫描一次：
+
+```bash
+./scripts/scan_secrets.sh
 ```
 
 发布脚本会：
