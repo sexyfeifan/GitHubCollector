@@ -513,9 +513,9 @@ final class AppViewModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func retranslateRecord(_ record: RepoRecord) {
+    func optimizeRecordText(_ record: RepoRecord) {
         Task {
-            await runRetranslation(record)
+            await runTextOptimization(record)
         }
     }
 
@@ -914,16 +914,18 @@ final class AppViewModel: ObservableObject {
 
         let readmeOriginal = fetchedReadme.trimmingCharacters(in: .whitespacesAndNewlines)
         let readmeForProcessing = readmeOriginal.isEmpty ? (fetchedRepo.description ?? "") : readmeOriginal
+        let cleanReadme = cleanReadmeContent(readmeForProcessing)
+        let readmeTextForDisplay = cleanReadme.isEmpty ? readmeForProcessing : cleanReadme
         let releaseNotesEN = fetchedRelease?.body ?? ""
-        let classifyText = mergedDescription(repo: fetchedRepo, readme: cleanReadmeContent(readmeForProcessing))
+        let classifyText = mergedDescription(repo: fetchedRepo, readme: readmeTextForDisplay)
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        let chineseDescription = await translator.translateToChinese(readmeForProcessing, config: config)
+        let chineseDescription = await buildChineseDescription(from: readmeTextForDisplay, config: config)
         let chineseReleaseNotes = await translator.translateToChinese(releaseNotesEN, config: config)
-        let setupGuide = await translator.extractSetupGuide(readmeForProcessing, config: config)
+        let setupGuide = await translator.extractSetupGuide(readmeTextForDisplay, config: config)
 
         let summary = summarizer.summarize(
-            chineseDescription.isEmpty ? readmeForProcessing : chineseDescription,
+            chineseDescription.isEmpty ? readmeTextForDisplay : chineseDescription,
             fallbackTitle: fetchedRepo.name
         )
 
@@ -989,7 +991,7 @@ final class AppViewModel: ObservableObject {
             identity: identity,
             projectName: fetchedRepo.name,
             sourceURL: fetchedRepo.htmlURL,
-            descriptionEN: readmeOriginal,
+            descriptionEN: readmeTextForDisplay,
             descriptionZH: chineseDescription,
             summaryZH: summary,
             setupGuideZH: setupGuide,
@@ -1088,20 +1090,18 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func runRetranslation(_ record: RepoRecord) async {
+    private func runTextOptimization(_ record: RepoRecord) async {
         isLoading = true
         defer { isLoading = false }
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        if !config.isEnabled {
-            errorMessage = "请先在设置中填写 OpenAI API Key。"
-            return
-        }
-
-        statusMessage = "正在重新翻译：\(record.projectName)"
+        statusMessage = "正在优化文本：\(record.projectName)"
         var updated = record
-        updated.descriptionZH = await translator.translateToChinese(record.descriptionEN, config: config)
-        updated.setupGuideZH = await translator.extractSetupGuide(record.descriptionEN, config: config)
+        let cleaned = cleanReadmeContent(record.descriptionEN)
+        let textSource = cleaned.isEmpty ? record.descriptionEN : cleaned
+        updated.descriptionEN = textSource
+        updated.descriptionZH = await buildChineseDescription(from: textSource, config: config)
+        updated.setupGuideZH = await translator.extractSetupGuide(textSource, config: config)
         updated.releaseNotesZH = await translator.translateToChinese(record.releaseNotesEN, config: config)
         updated.summaryZH = summarizer.summarize(updated.descriptionZH, fallbackTitle: record.projectName)
         updated.updatedAt = Date()
@@ -1109,9 +1109,9 @@ final class AppViewModel: ObservableObject {
         do {
             try storage.saveRecord(updated, baseDir: activeBaseDir)
             reloadRecords()
-            statusMessage = "已完成重新翻译：\(record.projectName)"
+            statusMessage = "已完成文本优化：\(record.projectName)"
         } catch {
-            errorMessage = "保存翻译结果失败：\(error.localizedDescription)"
+            errorMessage = "保存文本优化结果失败：\(error.localizedDescription)"
         }
     }
 
@@ -1163,6 +1163,30 @@ final class AppViewModel: ObservableObject {
         let repoDesc = repo.description ?? ""
         let readmeBrief = String(readme.prefix(1600)).replacingOccurrences(of: "#", with: "")
         return "\(repoDesc)\n\n\(readmeBrief)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func buildChineseDescription(from text: String, config: TranslationConfig) async -> String {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "暂无简介内容。" }
+
+        if containsChineseText(cleaned) {
+            return cleaned
+        }
+
+        let translated = await translator.translateToChinese(cleaned, config: config)
+        if containsChineseText(translated) {
+            return translated
+        }
+        return cleaned
+    }
+
+    private func containsChineseText(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            if scalar.value >= 0x4E00 && scalar.value <= 0x9FFF {
+                return true
+            }
+        }
+        return false
     }
 
     private func cleanReadmeContent(_ raw: String) -> String {

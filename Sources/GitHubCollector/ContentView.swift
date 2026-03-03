@@ -46,7 +46,6 @@ struct ContentView: View {
                                 openFolder: { vm.openInFinder(record) },
                                 openInstaller: { vm.openInstaller(record) },
                                 openSource: { vm.openSourcePage(record) },
-                                retranslate: { vm.retranslateRecord(record) },
                                 openDetail: { detailRecord = record },
                                 deleteRecord: { deleteFiles in
                                     vm.deleteRecord(record, deleteFiles: deleteFiles)
@@ -84,7 +83,8 @@ struct ContentView: View {
         .sheet(item: $detailRecord) { record in
             RepoDetailView(
                 record: record,
-                onPullSource: { vm.pullSourceCode(record) }
+                onPullSource: { vm.pullSourceCode(record) },
+                onOptimizeText: { vm.optimizeRecordText(record) }
             ) {
                 detailRecord = nil
             }
@@ -507,7 +507,6 @@ private struct RepoCard: View {
     let openFolder: () -> Void
     let openInstaller: () -> Void
     let openSource: () -> Void
-    let retranslate: () -> Void
     let openDetail: () -> Void
     let deleteRecord: (Bool) -> Void
 
@@ -556,8 +555,9 @@ private struct RepoCard: View {
                 Button("详情窗口", action: openDetail)
                 Button("GitHub", action: openSource)
                 Button("打开目录", action: openFolder)
-                Button(record.hasDownloadAsset ? "安装/解压" : "查看简介", action: openInstaller)
-                Button("重新翻译", action: retranslate)
+                if record.hasDownloadAsset {
+                    Button("安装/解压", action: openInstaller)
+                }
             }
             .buttonStyle(.bordered)
 
@@ -601,6 +601,7 @@ private struct RepoCard: View {
 private struct RepoDetailView: View {
     let record: RepoRecord
     let onPullSource: () -> Void
+    let onOptimizeText: () -> Void
     let onClose: () -> Void
     @State private var renderMarkdown = true
 
@@ -655,37 +656,52 @@ private struct RepoDetailView: View {
                 .font(.caption)
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if !record.previewImagePath.isEmpty {
-                        LocalPreviewImage(path: record.previewImagePath)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 220)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+            ScrollViewReader { proxy in
+                HStack(spacing: 10) {
+                    Button("查看简介") {
+                        withAnimation {
+                            proxy.scrollTo("section-intro", anchor: .top)
+                        }
                     }
-                    section(
-                        "简介（中文）",
-                        record.descriptionZH.isEmpty ? "暂无中文简介" : record.descriptionZH,
-                        renderMarkdown: renderMarkdown
-                    )
-                    section(
-                        "搭建教程",
-                        record.setupGuideZH.isEmpty ? "暂无可提取的搭建安装相关内容" : record.setupGuideZH,
-                        renderMarkdown: renderMarkdown,
-                        codeLike: true
-                    )
-                    section(
-                        "更新说明",
-                        record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
-                        renderMarkdown: renderMarkdown
-                    )
-                    section(
-                        "README.md",
-                        originalReadmeBundle,
-                        renderMarkdown: renderMarkdown
-                    )
+                    .buttonStyle(.bordered)
+                    Button("文本优化", action: onOptimizeText)
+                        .buttonStyle(.bordered)
                 }
-                .padding(.top, 6)
+                .padding(.bottom, 4)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if !record.previewImagePath.isEmpty {
+                            LocalPreviewImage(path: record.previewImagePath)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 220)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        section(
+                            "简介（中文）",
+                            record.descriptionZH.isEmpty ? "暂无中文简介" : record.descriptionZH,
+                            renderMarkdown: renderMarkdown
+                        )
+                        .id("section-intro")
+                        section(
+                            "搭建教程",
+                            record.setupGuideZH.isEmpty ? "暂无可提取的搭建安装相关内容" : record.setupGuideZH,
+                            renderMarkdown: renderMarkdown,
+                            codeLike: true
+                        )
+                        section(
+                            "更新说明",
+                            record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
+                            renderMarkdown: renderMarkdown
+                        )
+                        section(
+                            "README.md",
+                            originalReadmeBundle,
+                            renderMarkdown: renderMarkdown
+                        )
+                    }
+                    .padding(.top, 6)
+                }
             }
         }
         .padding(16)
@@ -764,19 +780,23 @@ private struct LogDetailView: View {
                     .buttonStyle(.borderedProminent)
             }
 
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(logs.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+            GeometryReader { geo in
+                ScrollView([.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(logs.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                     }
+                    .frame(minWidth: max(geo.size.width - 24, 1000), alignment: .leading)
+                    .padding(8)
                 }
-                .padding(8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(NSColor.textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .background(Color(NSColor.textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .padding(16)
     }
