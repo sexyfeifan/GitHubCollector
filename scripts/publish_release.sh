@@ -40,7 +40,8 @@ AUTH_HEADERS=(
   -H "X-GitHub-Api-Version: 2022-11-28"
 )
 
-NOTES="## ✨ 更新亮点
+NOTES="$(cat <<'EOF'
+## ✨ 更新亮点
 - 🚀 发布流程升级：自动构建并上传 `GitHubCollector.dmg` / `GitHubCollector.app.zip` / 源码包。
 - 🧪 设置页新增检测：支持 AI 连通性测试与 GitHub Token 有效性测试。
 - 🛡️ 抓取稳健性修复：Token 异常自动回退无 Token 请求，降低抓取失败概率。
@@ -52,7 +53,9 @@ NOTES="## ✨ 更新亮点
 ## 📦 资产说明
 - `GitHubCollector.dmg`：macOS 安装包（推荐）
 - `GitHubCollector.app.zip`：应用包压缩版
-- `GitHubCollector-source.tar.gz`：对应版本源码"
+- `GitHubCollector-source.tar.gz`：对应版本源码
+EOF
+)"
 
 release_http_code="$(curl -sS -o /tmp/gh_release_existing.json -w '%{http_code}' \
   "${AUTH_HEADERS[@]}" \
