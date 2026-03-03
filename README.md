@@ -64,6 +64,26 @@ swift --version
 
 确认工具链与系统 SDK 匹配后重新编译。
 
+## 发布（DMG 标准流程）
+
+以后发布统一使用 DMG 安装包：
+
+```bash
+# 1) 仅本地构建 DMG + 源码包
+./scripts/build_dmg.sh
+
+# 2) 构建并发布到 GitHub Release（资产固定为 GitHubCollector.dmg）
+export GITHUB_TOKEN=你的GitHubToken
+./scripts/publish_release.sh v1.0.21 sexyfeifan GitHubCollector
+```
+
+发布脚本会：
+- 自动构建 release 二进制并封装为 `GitHubCollector.dmg`
+- 自动创建/更新对应 tag 的 GitHub Release，名称为 `GitHubCollector <tag>`
+- 清理该 Release 旧资产并重新上传：
+  - `GitHubCollector.dmg`
+  - `GitHubCollector-source.tar.gz`
+
 ## 本地数据
 
 应用会把下载文件和记录存到：
