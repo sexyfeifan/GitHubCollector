@@ -30,17 +30,6 @@ final class AppViewModel: ObservableObject {
         let reason: String
     }
 
-    enum ImportError: Error, LocalizedError {
-        case noDownloadAssetSkipped
-
-        var errorDescription: String? {
-            switch self {
-            case .noDownloadAssetSkipped:
-                return "该项目没有可下载安装包，且当前设置未开启“纳入无安装包项目”。"
-            }
-        }
-    }
-
     @Published var inputURL: String = ""
     @Published var isLoading = false
     @Published var statusMessage: String = ""
@@ -56,7 +45,8 @@ final class AppViewModel: ObservableObject {
     @Published var githubToken: String = ""
     @Published var retryCount: Int = 2
     @Published var downloadRootPath: String = ""
-    @Published var includeNoPackageProjects: Bool = true
+    @Published var isTestingAIConnectivity = false
+    @Published var isTestingGitHubToken = false
 
     @Published var queueItems: [QueueItem] = []
     @Published var failedURLs: [String] = []
@@ -203,6 +193,50 @@ final class AppViewModel: ObservableObject {
             statusMessage = "已粘贴 GitHub Token。"
         } else {
             errorMessage = "剪贴板没有可用文本。"
+        }
+    }
+
+    func testAIConnectivity() {
+        let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
+        guard config.isEnabled else {
+            errorMessage = "请先填写 OpenAI API Key 再测试连通性。"
+            return
+        }
+
+        isTestingAIConnectivity = true
+        statusMessage = "正在测试 AI 连通性..."
+        errorMessage = ""
+
+        Task {
+            defer { isTestingAIConnectivity = false }
+            do {
+                let result = try await translator.probeConnectivity(config: config)
+                statusMessage = "AI 连通成功：\(result)"
+            } catch {
+                errorMessage = "AI 连通失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func testGitHubTokenValidity() {
+        let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            errorMessage = "请先填写 GitHub Token。"
+            return
+        }
+
+        isTestingGitHubToken = true
+        statusMessage = "正在验证 GitHub Token..."
+        errorMessage = ""
+
+        Task {
+            defer { isTestingGitHubToken = false }
+            do {
+                let login = try await github.validateToken(token)
+                statusMessage = "GitHub Token 有效：\(login)"
+            } catch {
+                errorMessage = "GitHub Token 无效：\(error.localizedDescription)"
+            }
         }
     }
 
@@ -613,9 +647,6 @@ final class AppViewModel: ObservableObject {
         appendLog("已拉取源码：\(sourceCodePath)")
 
         if assets.isEmpty {
-            if !includeNoPackageProjects {
-                throw ImportError.noDownloadAssetSkipped
-            }
             hasDownloadAsset = false
             localPath = ""
             releaseAssetName = "无安装包"
@@ -959,7 +990,6 @@ final class AppViewModel: ObservableObject {
         githubToken = s.githubToken
         retryCount = s.retryCount
         downloadRootPath = s.downloadRootPath
-        includeNoPackageProjects = s.includeNoPackageProjects
     }
 
     @discardableResult
@@ -979,8 +1009,7 @@ final class AppViewModel: ObservableObject {
             openAIModel: openAIModel,
             githubToken: githubToken,
             retryCount: retryCount,
-            downloadRootPath: downloadPath,
-            includeNoPackageProjects: includeNoPackageProjects
+            downloadRootPath: downloadPath
         )
     }
 

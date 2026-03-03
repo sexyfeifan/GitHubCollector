@@ -2,17 +2,17 @@ import Foundation
 
 enum GitHubServiceError: Error, LocalizedError {
     case invalidResponse
-    case missingRelease
-    case missingAsset
+    case unauthorized
+    case rateLimited
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "GitHub 返回异常，请稍后重试。"
-        case .missingRelease:
-            return "该项目暂无可用 Release。"
-        case .missingAsset:
-            return "最新 Release 没有可下载资产。"
+        case .unauthorized:
+            return "GitHub Token 无效或权限不足。"
+        case .rateLimited:
+            return "GitHub API 触发限流，请稍后重试或配置有效 Token。"
         }
     }
 }
@@ -25,13 +25,11 @@ struct GitHubService {
 
     func fetchRepo(_ identity: RepoIdentity, token: String = "") async throws -> GitHubRepo {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)")!
-        let request = makeRequest(url: url, token: token, accept: "application/vnd.github+json")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw GitHubServiceError.invalidResponse
-        }
-
+        let (data, _) = try await dataWithAuthFallback(
+            url: url,
+            token: token,
+            accept: "application/vnd.github+json"
+        )
         return try decoder.decode(GitHubRepo.self, from: data)
     }
 
@@ -39,9 +37,12 @@ struct GitHubService {
         do {
             // Prefer GitHub API readme endpoint, which can resolve README filename and default branch automatically.
             let apiURL = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/readme")!
-            let request = makeRequest(url: apiURL, token: token, accept: "application/vnd.github.raw+json")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+            let (data, response) = try await dataWithAuthFallback(
+                url: apiURL,
+                token: token,
+                accept: "application/vnd.github.raw+json"
+            )
+            if (200...299).contains(response.statusCode) {
                 let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !text.isEmpty { return text }
             }
@@ -85,30 +86,39 @@ struct GitHubService {
     private func fetchLatestReleaseFromEndpoint(_ identity: RepoIdentity, token: String) async throws -> GitHubRelease? {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/releases/latest")!
         let request = makeRequest(url: url, token: token, accept: "application/vnd.github+json")
-
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw GitHubServiceError.invalidResponse }
+        guard let http = response as? HTTPURLResponse else {
+            throw GitHubServiceError.invalidResponse
+        }
 
         if http.statusCode == 404 {
             return nil
         }
-
-        guard (200...299).contains(http.statusCode) else {
-            throw GitHubServiceError.invalidResponse
+        if (http.statusCode == 401 || http.statusCode == 403), !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let (retryData, retryHttp) = try await dataWithAuthFallback(
+                url: url,
+                token: "",
+                accept: "application/vnd.github+json",
+                allowFallbackToAnonymous: false
+            )
+            if retryHttp.statusCode == 404 {
+                return nil
+            }
+            return try decoder.decode(GitHubRelease.self, from: retryData)
         }
+
+        try throwIfNeeded(http: http)
 
         return try decoder.decode(GitHubRelease.self, from: data)
     }
 
     private func fetchReleases(_ identity: RepoIdentity, token: String) async throws -> [GitHubRelease] {
         let url = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/releases?per_page=20")!
-        let request = makeRequest(url: url, token: token, accept: "application/vnd.github+json")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw GitHubServiceError.invalidResponse
-        }
-
+        let (data, _) = try await dataWithAuthFallback(
+            url: url,
+            token: token,
+            accept: "application/vnd.github+json"
+        )
         return try decoder.decode([GitHubRelease].self, from: data)
     }
 
@@ -143,12 +153,11 @@ struct GitHubService {
         var all: [String] = []
         while page <= 20 {
             let url = URL(string: "https://api.github.com/users/\(username)/starred?per_page=100&page=\(page)")!
-            let request = makeRequest(url: url, token: token, accept: "application/vnd.github+json")
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                throw GitHubServiceError.invalidResponse
-            }
+            let (data, _) = try await dataWithAuthFallback(
+                url: url,
+                token: token,
+                accept: "application/vnd.github+json"
+            )
 
             let repos = try decoder.decode([GitHubRepo].self, from: data)
             if repos.isEmpty { break }
@@ -157,6 +166,66 @@ struct GitHubService {
             page += 1
         }
         return Array(Set(all)).sorted()
+    }
+
+    func validateToken(_ token: String) async throws -> String {
+        let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { throw GitHubServiceError.unauthorized }
+
+        let url = URL(string: "https://api.github.com/user")!
+        let (data, _) = try await dataWithAuthFallback(
+            url: url,
+            token: cleaned,
+            accept: "application/vnd.github+json",
+            allowFallbackToAnonymous: false
+        )
+
+        struct User: Decodable { let login: String }
+        let decoded = try decoder.decode(User.self, from: data)
+        return decoded.login
+    }
+
+    private func dataWithAuthFallback(
+        url: URL,
+        token: String,
+        accept: String,
+        allowFallbackToAnonymous: Bool = true
+    ) async throws -> (Data, HTTPURLResponse) {
+        let request = makeRequest(url: url, token: token, accept: accept)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw GitHubServiceError.invalidResponse
+        }
+        if (200...299).contains(http.statusCode) {
+            return (data, http)
+        }
+
+        let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if allowFallbackToAnonymous, !cleaned.isEmpty, http.statusCode == 401 || http.statusCode == 403 {
+            let fallbackRequest = makeRequest(url: url, token: "", accept: accept)
+            let (fallbackData, fallbackResponse) = try await URLSession.shared.data(for: fallbackRequest)
+            guard let fallbackHttp = fallbackResponse as? HTTPURLResponse else {
+                throw GitHubServiceError.invalidResponse
+            }
+            if (200...299).contains(fallbackHttp.statusCode) {
+                return (fallbackData, fallbackHttp)
+            }
+            try throwIfNeeded(http: fallbackHttp)
+        }
+
+        try throwIfNeeded(http: http)
+        throw GitHubServiceError.invalidResponse
+    }
+
+    private func throwIfNeeded(http: HTTPURLResponse) throws {
+        if (200...299).contains(http.statusCode) { return }
+        if http.statusCode == 401 {
+            throw GitHubServiceError.unauthorized
+        }
+        if http.statusCode == 403, http.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" {
+            throw GitHubServiceError.rateLimited
+        }
+        throw GitHubServiceError.invalidResponse
     }
 
     private func makeRequest(url: URL, token: String, accept: String) -> URLRequest {

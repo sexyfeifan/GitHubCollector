@@ -9,6 +9,20 @@ struct TranslationConfig {
 }
 
 struct TranslatorService {
+    func probeConnectivity(config: TranslationConfig) async throws -> String {
+        guard config.isEnabled else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        let output = try await chat(
+            system: "你是连通性检测助手。只返回 OK。",
+            user: "返回 OK",
+            config: config,
+            temperature: 0
+        )
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "OK" : String(trimmed.prefix(40))
+    }
+
     func translateToChinese(_ text: String, config: TranslationConfig) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }

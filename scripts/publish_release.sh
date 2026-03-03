@@ -40,6 +40,8 @@ AUTH_HEADERS=(
 
 NOTES="## 更新亮点
 - 发布流程升级：自动构建 macOS 可安装的 GitHubCollector.dmg 并上传到 Release。
+- 新增设置页检测能力：支持 AI 连通性测试与 GitHub Token 有效性测试。
+- 抓取稳健性修复：Token 异常时自动回退无 Token 请求，降低抓取失败概率。
 - 抓取准确性提升：latest release 无资产时自动回退到有资产版本。
 - 抓取流程升级：先完整拉取源码，再下载该 release 全部安装包。
 - README 语义修复：原文完整保留，中文区显示翻译与精简归纳。

@@ -301,6 +301,15 @@ struct ContentView: View {
                     )
             }
 
+            HStack {
+                Button(vm.isTestingAIConnectivity ? "AI 测试中..." : "测试 AI 连通性") {
+                    vm.testAIConnectivity()
+                }
+                .buttonStyle(.bordered)
+                .disabled(vm.isTestingAIConnectivity)
+                Spacer()
+            }
+
             Divider()
 
             Text("GitHub")
@@ -323,6 +332,15 @@ struct ContentView: View {
                         .buttonStyle(.bordered)
                     Spacer()
                 }
+            }
+
+            HStack {
+                Button(vm.isTestingGitHubToken ? "验证中..." : "测试 Token 有效性") {
+                    vm.testGitHubTokenValidity()
+                }
+                .buttonStyle(.bordered)
+                .disabled(vm.isTestingGitHubToken)
+                Spacer()
             }
 
             Divider()
@@ -358,9 +376,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-
-            Toggle("纳入无安装包项目", isOn: $vm.includeNoPackageProjects)
-                .toggleStyle(.switch)
 
             HStack {
                 Spacer()

@@ -7,7 +7,6 @@ struct AppSettings {
     var githubToken: String = ""
     var retryCount: Int = 2
     var downloadRootPath: String = ""
-    var includeNoPackageProjects: Bool = true
 }
 
 struct SettingsStore {
@@ -18,7 +17,6 @@ struct SettingsStore {
         static let githubToken = "settings.github.token"
         static let retryCount = "settings.retry_count"
         static let downloadRootPath = "settings.download.root_path"
-        static let includeNoPackageProjects = "settings.include_no_package_projects"
     }
 
     private let ud = UserDefaults.standard
@@ -32,11 +30,6 @@ struct SettingsStore {
         let retry = ud.integer(forKey: Keys.retryCount)
         s.retryCount = retry == 0 ? 2 : max(1, min(retry, 5))
         s.downloadRootPath = ud.string(forKey: Keys.downloadRootPath) ?? ""
-        if ud.object(forKey: Keys.includeNoPackageProjects) == nil {
-            s.includeNoPackageProjects = true
-        } else {
-            s.includeNoPackageProjects = ud.bool(forKey: Keys.includeNoPackageProjects)
-        }
         return s
     }
 
@@ -47,7 +40,6 @@ struct SettingsStore {
         ud.set(settings.githubToken, forKey: Keys.githubToken)
         ud.set(max(1, min(settings.retryCount, 5)), forKey: Keys.retryCount)
         ud.set(settings.downloadRootPath, forKey: Keys.downloadRootPath)
-        ud.set(settings.includeNoPackageProjects, forKey: Keys.includeNoPackageProjects)
     }
 
     func loadFromFile(baseDir: URL) -> AppSettings? {
@@ -82,7 +74,6 @@ private struct FileSettings: Codable {
     let githubToken: String
     let retryCount: Int
     let downloadRootPath: String
-    let includeNoPackageProjects: Bool
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -92,7 +83,6 @@ private struct FileSettings: Codable {
         githubToken = try c.decodeIfPresent(String.self, forKey: .githubToken) ?? ""
         retryCount = try c.decodeIfPresent(Int.self, forKey: .retryCount) ?? 2
         downloadRootPath = try c.decodeIfPresent(String.self, forKey: .downloadRootPath) ?? ""
-        includeNoPackageProjects = try c.decodeIfPresent(Bool.self, forKey: .includeNoPackageProjects) ?? true
     }
 
     init(from settings: AppSettings, normalizedDownloadPath: String) {
@@ -102,7 +92,6 @@ private struct FileSettings: Codable {
         githubToken = settings.githubToken
         retryCount = max(1, min(settings.retryCount, 5))
         downloadRootPath = normalizedDownloadPath
-        includeNoPackageProjects = settings.includeNoPackageProjects
     }
 
     func toAppSettings(defaultDownloadPath: String) -> AppSettings {
@@ -113,7 +102,6 @@ private struct FileSettings: Codable {
         settings.githubToken = githubToken
         settings.retryCount = max(1, min(retryCount, 5))
         settings.downloadRootPath = downloadRootPath.isEmpty ? defaultDownloadPath : downloadRootPath
-        settings.includeNoPackageProjects = includeNoPackageProjects
         return settings
     }
 }
