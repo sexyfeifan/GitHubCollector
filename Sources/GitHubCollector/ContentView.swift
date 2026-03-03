@@ -99,6 +99,8 @@ struct ContentView: View {
                 vm.formatRecordOffline(record)
             } retranslate: {
                 vm.retranslateRecord(record)
+            } refetch: {
+                vm.refetchRecord(record)
             }
             .frame(minWidth: 1040, minHeight: 760)
         }
@@ -113,14 +115,16 @@ struct ContentView: View {
                 all: vm.failedProjects,
                 notFound: vm.failed404Projects,
                 failed: vm.failedNon404Projects,
+                localDetected: vm.localDetectedProjects,
                 canRetry: vm.crawlState != .running,
                 openURL: vm.openGitHubURL,
                 openAll: vm.openGitHubURLs,
-                retryAll: vm.retryFailedProjectURLs
+                retryAll: vm.retryFailedProjectURLs,
+                clearLocal: vm.clearLocalDetectedRecords
             ) {
                 showFailureSheet = false
             }
-            .frame(minWidth: 980, minHeight: 640)
+            .frame(minWidth: 980, minHeight: 700)
         }
         .onChange(of: vm.searchQuery) { _ in
             vm.resetPageToFirst()
@@ -460,10 +464,10 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(vm.isLoading)
             }
-            if !vm.failedProjects.isEmpty {
+            if !vm.failedProjects.isEmpty || !vm.localDetectedProjects.isEmpty {
                 GroupBox("失败项目汇总（可跳转检查）") {
                     HStack {
-                        Text("404项目: \(vm.failed404Projects.count)  失败项目: \(vm.failedNon404Projects.count)")
+                        Text("404项目: \(vm.failed404Projects.count)  失败项目: \(vm.failedNon404Projects.count)  本地待补抓: \(vm.localDetectedProjects.count)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -473,33 +477,39 @@ struct ContentView: View {
                         .buttonStyle(.bordered)
                     }
                     .padding(.bottom, 4)
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            ForEach(vm.failedProjects) { item in
-                                HStack {
-                                    Text(item.name)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 8)
-                                    Button("打开 GitHub") {
-                                        vm.openGitHubURL(item.url)
+                    if vm.failedProjects.isEmpty {
+                        Text("当前没有抓取失败项，存在 \(vm.localDetectedProjects.count) 个仅本地识别项目，可在分拣页进行清除或补抓。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(vm.failedProjects) { item in
+                                    HStack {
+                                        Text(item.name)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                        Spacer(minLength: 8)
+                                        Button("打开 GitHub") {
+                                            vm.openGitHubURL(item.url)
+                                        }
+                                        .buttonStyle(.bordered)
                                     }
-                                    .buttonStyle(.bordered)
+                                    Text(item.url)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text(item.reason)
+                                        .font(.caption2)
+                                        .foregroundStyle(failureColor(item.type))
+                                        .lineLimit(1)
+                                    Divider()
                                 }
-                                Text(item.url)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                Text(item.reason)
-                                    .font(.caption2)
-                                    .foregroundStyle(failureColor(item.type))
-                                    .lineLimit(1)
-                                Divider()
                             }
+                            .padding(4)
                         }
-                        .padding(4)
+                        .frame(height: 120)
                     }
-                    .frame(height: 120)
                 }
             }
         }
@@ -592,6 +602,7 @@ private struct RepoCard: View {
 
             HStack {
                 Button("GitHub", action: openSource)
+                    .disabled(record.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("打开目录", action: openFolder)
             }
             .buttonStyle(.bordered)
@@ -644,6 +655,7 @@ private struct RepoDetailView: View {
     @State private var showFormattedZH = false
     @State private var showSetupGuide = false
     let retranslate: () -> Void
+    let refetch: () -> Void
     @State private var showENDescription = false
     @State private var showENReleaseNotes = false
 
@@ -677,6 +689,12 @@ private struct RepoDetailView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
+            if record.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("该项目来自本地目录扫描，尚未抓取到 GitHub 仓库信息。可点击“重新抓取”补录仓库链接。")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack {
                 Picker("显示模式", selection: $renderMarkdown) {
                     Text("渲染").tag(true)
@@ -687,7 +705,7 @@ private struct RepoDetailView: View {
                 Spacer()
             }
 
-            // 标题下方排列操作：GitHub / 打开目录 / 重新翻译 / 离线排版
+            // 标题下方排列操作：GitHub / 打开目录 / 重新抓取 / 重新翻译 / 离线排版
             HStack(spacing: 10) {
                 Button("GitHub") {
                     if let url = URL(string: record.sourceURL), !record.sourceURL.isEmpty {
@@ -695,6 +713,7 @@ private struct RepoDetailView: View {
                     }
                 }
                 .buttonStyle(.bordered)
+                .disabled(record.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("打开目录") {
                     if !record.localPath.isEmpty {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.localPath)])
@@ -703,6 +722,8 @@ private struct RepoDetailView: View {
                     }
                 }
                 .buttonStyle(.bordered)
+                Button("重新抓取") { refetch() }
+                .buttonStyle(.borderedProminent)
                 Button("重新翻译") { retranslate() }
                 .buttonStyle(.bordered)
                 Button("离线排版") { formatOffline() }
@@ -866,10 +887,12 @@ private struct FailureHubView: View {
     let all: [AppViewModel.FailedProject]
     let notFound: [AppViewModel.FailedProject]
     let failed: [AppViewModel.FailedProject]
+    let localDetected: [RepoRecord]
     let canRetry: Bool
     let openURL: (String) -> Void
     let openAll: ([String]) -> Void
     let retryAll: ([String]) -> Void
+    let clearLocal: ([String]) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -882,7 +905,7 @@ private struct FailureHubView: View {
                     .buttonStyle(.borderedProminent)
             }
 
-            Text("总计 \(all.count) 项；404项目 \(notFound.count) 项；失败项目 \(failed.count) 项")
+            Text("总计 \(all.count) 项；404项目 \(notFound.count) 项；失败项目 \(failed.count) 项；本地待补抓 \(localDetected.count) 项")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -891,6 +914,9 @@ private struct FailureHubView: View {
             }
             GroupBox("失败项目") {
                 failureList(failed, accent: .red)
+            }
+            GroupBox("本地待补抓项目") {
+                localDetectedList(localDetected)
             }
         }
         .padding(16)
@@ -945,7 +971,55 @@ private struct FailureHubView: View {
                 }
                 .padding(4)
             }
-            .frame(height: 180)
+            .frame(height: 160)
+        }
+    }
+
+    private func localDetectedList(_ items: [RepoRecord]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("共 \(items.count) 项")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("一键清除") {
+                    clearLocal(items.map(\.id))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(items.isEmpty)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if items.isEmpty {
+                        Text("暂无")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(items) { item in
+                        HStack(alignment: .top) {
+                            Text(item.projectName)
+                                .font(.caption)
+                            Spacer(minLength: 8)
+                            Button("清除") {
+                                clearLocal([item.id])
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Text(item.fullName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("原因：该项目仅由本地目录扫描识别，尚未抓取到 GitHub 仓库地址。")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                    }
+                }
+                .padding(4)
+            }
+            .frame(height: 140)
         }
     }
 }

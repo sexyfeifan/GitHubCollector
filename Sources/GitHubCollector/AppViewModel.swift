@@ -177,6 +177,10 @@ final class AppViewModel: ObservableObject {
         failedProjects.filter { $0.type != .notFound404 }
     }
 
+    var localDetectedProjects: [RepoRecord] {
+        records.filter { isLocalDetectedRecord($0) }
+    }
+
     var openAITotalTokens: Int { openAIPromptTokens + openAICompletionTokens }
 
 
@@ -482,19 +486,7 @@ final class AppViewModel: ObservableObject {
             errorMessage = "未识别到有效的 GitHub 链接。"
             return
         }
-        rememberKnownURLs(urls)
-
-        queueTask?.cancel()
-        queueTask = Task {
-            let expanded = await expandInputURLs(urls)
-            guard !expanded.isEmpty else {
-                errorMessage = "没有可抓取的仓库链接。"
-                return
-            }
-            rememberKnownURLs(expanded)
-            prepareQueue(with: expanded)
-            await runPreparedQueue()
-        }
+        startCrawlWithURLs(urls, action: "开始抓取")
     }
 
     func pauseCrawl() {
@@ -524,14 +516,41 @@ final class AppViewModel: ObservableObject {
     }
 
     func retryFailedProjectURLs(_ urls: [String]) {
-        let retries = uniqueRepoURLs(urls)
-        guard !retries.isEmpty else { return }
-        rememberKnownURLs(retries)
-        queueTask?.cancel()
-        queueTask = Task {
-            prepareQueue(with: retries)
-            await runPreparedQueue()
+        startCrawlWithURLs(urls, action: "重试失败项")
+    }
+
+    func refetchRecord(_ record: RepoRecord) {
+        if crawlState == .running {
+            errorMessage = "当前正在抓取，请先停止后再重新抓取。"
+            return
         }
+
+        if let repoURL = canonicalRepoURL(from: record.sourceURL) {
+            startCrawlWithURLs([repoURL], action: "重新抓取")
+            return
+        }
+
+        guard let manualURL = promptManualRepoURL(for: record) else { return }
+        startCrawlWithURLs([manualURL], action: "重新抓取")
+    }
+
+    func clearLocalDetectedRecords(ids: [String]) {
+        let idSet = Set(ids)
+        let targets = records.filter { idSet.contains($0.id) && isLocalDetectedRecord($0) }
+        guard !targets.isEmpty else { return }
+
+        var cleared = 0
+        for item in targets {
+            do {
+                try storage.deleteRecord(item, baseDir: activeBaseDir, removeFiles: false)
+                cleared += 1
+            } catch {
+                appendLog("清除本地待补抓项目失败：\(item.projectName)，原因：\(error.localizedDescription)")
+            }
+        }
+        reloadRecords()
+        statusMessage = "已清除本地待补抓项目记录 \(cleared) 项。"
+        appendLog(statusMessage)
     }
 
     func openGitHubURL(_ rawURL: String) {
@@ -656,6 +675,59 @@ final class AppViewModel: ObservableObject {
             onlyMacOSAssets = disk.onlyMacOSAssets
             appendLog("已从下载目录加载设置。")
         }
+    }
+
+    private func startCrawlWithURLs(_ urls: [String], action: String) {
+        let seeds = uniqueKnownURLs(urls)
+        guard !seeds.isEmpty else {
+            errorMessage = "没有可抓取的仓库链接。"
+            return
+        }
+
+        rememberKnownURLs(seeds)
+        queueTask?.cancel()
+        queueTask = Task {
+            let expanded = await expandInputURLs(seeds)
+            guard !expanded.isEmpty else {
+                errorMessage = "没有可抓取的仓库链接。"
+                return
+            }
+            rememberKnownURLs(expanded)
+            appendLog("\(action)：加入 \(expanded.count) 条链接。")
+            prepareQueue(with: expanded)
+            await runPreparedQueue()
+        }
+    }
+
+    private func promptManualRepoURL(for record: RepoRecord) -> String? {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "补全 GitHub 链接"
+        alert.informativeText = "\(record.projectName) 来自本地目录扫描，尚未抓取到仓库信息。请输入 GitHub 仓库链接后重新抓取。"
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 460, height: 24))
+        input.placeholderString = "https://github.com/<owner>/<repo>"
+        input.stringValue = canonicalRepoURL(from: record.sourceURL) ?? ""
+        alert.accessoryView = input
+        alert.addButton(withTitle: "开始重新抓取")
+        alert.addButton(withTitle: "取消")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+
+        let raw = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoURL = canonicalRepoURL(from: raw) else {
+            errorMessage = "请输入有效的 GitHub 仓库链接（owner/repo）。"
+            return nil
+        }
+        return repoURL
+    }
+
+    private func isLocalDetectedRecord(_ record: RepoRecord) -> Bool {
+        let source = record.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return source.isEmpty &&
+            (record.id.hasPrefix("folder/") || record.id.hasPrefix("local/") || record.owner == "local")
     }
 
     private func prepareQueue(with urls: [String]) {
