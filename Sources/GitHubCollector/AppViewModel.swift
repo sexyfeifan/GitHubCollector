@@ -10,13 +10,10 @@ final class AppViewModel: ObservableObject {
     }
 
     enum CrawlControlError: Error, LocalizedError {
-        case noDataTimeout(seconds: Int)
         case skippedByUser
 
         var errorDescription: String? {
             switch self {
-            case .noDataTimeout(let seconds):
-                return "\(seconds) 秒内无数据进入，已跳过。"
             case .skippedByUser:
                 return "已手动跳过当前项目。"
             }
@@ -25,7 +22,6 @@ final class AppViewModel: ObservableObject {
 
     private enum QueueProcessOutcome {
         case success
-        case deferred
         case failed(String)
     }
 
@@ -50,6 +46,31 @@ final class AppViewModel: ObservableObject {
         let reason: String
     }
 
+    struct DownloadQueueItem: Identifiable {
+        enum Status: String {
+            case pending = "待下载"
+            case downloading = "下载中"
+            case success = "已完成"
+            case failed = "失败"
+        }
+
+        let id = UUID()
+        let recordID: String
+        let projectName: String
+        let projectDirPath: String
+        let asset: GitHubAsset
+        let source: String
+        var status: Status
+        var detail: String
+    }
+
+    struct LatestAssetOption: Identifiable {
+        let id: String
+        let asset: GitHubAsset
+        let alreadyDownloaded: Bool
+        let recommended: Bool
+    }
+
     @Published var inputURL: String = ""
     let appVersion: String = AppVersionResolver.currentVersionDisplay()
     @Published var isLoading = false
@@ -72,6 +93,7 @@ final class AppViewModel: ObservableObject {
     @Published var githubTokenTestResult: String = "未测试"
 
     @Published var queueItems: [QueueItem] = []
+    @Published var downloadQueueItems: [DownloadQueueItem] = []
     @Published var failedURLs: [String] = []
     @Published var failedProjects: [FailedProject] = []
     @Published var fetchPrecision: Double = 0
@@ -83,16 +105,14 @@ final class AppViewModel: ObservableObject {
     private var downloadLogTick: [String: Date] = [:]
     private var queuedURLs: [String] = []
     private var currentQueueIndex: Int = 0
-    private var deferredRetryURLs: [String] = []
-    private var retryQueueIndex: Int = 0
-    private var inRetryPhase = false
     private var pauseRequested = false
     private var stopRequested = false
     private var manualSkipRequested = false
-    private var lastDataActivityAt = Date()
     private var currentImportURL: String = ""
     private var currentImportTask: Task<RepoRecord, Error>?
     private var queueTask: Task<Void, Never>?
+    private var downloadQueueTask: Task<Void, Never>?
+    private var isDownloadQueueRunning = false
     private var lastSavedSettingsSnapshot = AppSettings()
 
     private let github = GitHubService()
@@ -170,6 +190,13 @@ final class AppViewModel: ObservableObject {
         guard total > 0 else { return "0/0" }
         let finished = queueItems.filter { $0.status == .success || $0.status == .failed }.count
         return "\(finished)/\(total)"
+    }
+    var downloadQueueSummary: String {
+        let pending = downloadQueueItems.filter { $0.status == .pending }.count
+        let downloading = downloadQueueItems.filter { $0.status == .downloading }.count
+        let finished = downloadQueueItems.filter { $0.status == .success }.count
+        let failed = downloadQueueItems.filter { $0.status == .failed }.count
+        return "待下载 \(pending) · 下载中 \(downloading) · 完成 \(finished) · 失败 \(failed)"
     }
 
     func nextPage() {
@@ -568,13 +595,9 @@ final class AppViewModel: ObservableObject {
         failedProjects = []
         queuedURLs = urls
         currentQueueIndex = 0
-        deferredRetryURLs = []
-        retryQueueIndex = 0
-        inRetryPhase = false
         manualSkipRequested = false
         currentImportURL = ""
         currentImportTask = nil
-        lastDataActivityAt = Date()
         queueItems = urls.map { QueueItem(url: $0, status: .pending, detail: "等待开始") }
     }
 
@@ -593,7 +616,7 @@ final class AppViewModel: ObservableObject {
         crawlState = .running
         isLoading = true
         let urls = queuedURLs
-        if !inRetryPhase && currentQueueIndex == 0 {
+        if currentQueueIndex == 0 {
             appendLog("开始抓取队列，共 \(urls.count) 条。")
         }
 
@@ -601,71 +624,27 @@ final class AppViewModel: ObservableObject {
             queueTask = nil
         }
 
-        if !inRetryPhase {
-            var i = currentQueueIndex
-            while i < urls.count {
-                if shouldStopOrPause(firstPhaseIndex: i, retryPhaseIndex: retryQueueIndex) {
-                    return
-                }
-
-                let outcome = await processQueueURL(
-                    urls[i],
-                    totalCount: urls.count,
-                    queuePosition: i + 1,
-                    inactivityTimeout: 10,
-                    allowDeferredRetry: true
-                )
-
-                switch outcome {
-                case .success:
-                    break
-                case .deferred:
-                    if !deferredRetryURLs.contains(urls[i]) {
-                        deferredRetryURLs.append(urls[i])
-                    }
-                case .failed(let reason):
-                    markQueueFailed(url: urls[i], reason: reason)
-                }
-
-                refreshQueueProgress()
-                i += 1
-                currentQueueIndex = i
-            }
-            inRetryPhase = true
-            retryQueueIndex = max(retryQueueIndex, 0)
-        }
-
-        if !deferredRetryURLs.isEmpty {
-            appendLog("进入延后重试阶段，共 \(deferredRetryURLs.count) 项（30 秒无数据将再次跳过）。")
-        }
-
-        var r = retryQueueIndex
-        while r < deferredRetryURLs.count {
-            if shouldStopOrPause(firstPhaseIndex: currentQueueIndex, retryPhaseIndex: r) {
+        var i = currentQueueIndex
+        while i < urls.count {
+            if shouldStopOrPause(queueIndex: i) {
                 return
             }
 
-            let url = deferredRetryURLs[r]
             let outcome = await processQueueURL(
-                url,
-                totalCount: deferredRetryURLs.count,
-                queuePosition: r + 1,
-                inactivityTimeout: 30,
-                allowDeferredRetry: false
+                urls[i],
+                totalCount: urls.count,
+                queuePosition: i + 1
             )
-
             switch outcome {
             case .success:
                 break
-            case .deferred:
-                markQueueFailed(url: url, reason: "重试阶段仍超时无数据（30 秒）。")
             case .failed(let reason):
-                markQueueFailed(url: url, reason: reason)
+                markQueueFailed(url: urls[i], reason: reason)
             }
 
             refreshQueueProgress()
-            r += 1
-            retryQueueIndex = r
+            i += 1
+            currentQueueIndex = i
         }
 
         finishQueueRun(total: urls.count)
@@ -674,63 +653,39 @@ final class AppViewModel: ObservableObject {
     private func processQueueURL(
         _ url: String,
         totalCount: Int,
-        queuePosition: Int,
-        inactivityTimeout: TimeInterval,
-        allowDeferredRetry: Bool
+        queuePosition: Int
     ) async -> QueueProcessOutcome {
         guard let idx = queueItems.firstIndex(where: { $0.url == url }) else {
             return .failed("队列状态异常：未找到任务索引。")
         }
 
         queueItems[idx].status = .running
-        queueItems[idx].detail = allowDeferredRetry ? "开始抓取（10 秒无数据会暂时跳过）" : "重试中（30 秒无数据将跳过）"
+        queueItems[idx].detail = "开始抓取（等待网络返回）"
         statusMessage = "(\(queuePosition)/\(totalCount)) 处理中：\(url)"
         appendLog("开始抓取：\(url)")
 
         do {
-            let record = try await importOne(url: url, retries: retryCount, inactivityTimeout: inactivityTimeout)
+            let record = try await importOne(url: url, retries: retryCount)
             queueItems[idx].status = .success
-            queueItems[idx].detail = "已完成：\(record.projectName)"
+            queueItems[idx].detail = "已入库：\(record.projectName)"
             appendLog("抓取成功：\(record.fullName) - 版本 \(record.releaseTag)")
             reloadRecords()
             return .success
         } catch let error as CrawlControlError {
             switch error {
-            case .noDataTimeout(let seconds):
-                if allowDeferredRetry {
-                    queueItems[idx].status = .pending
-                    queueItems[idx].detail = "\(seconds) 秒无数据，已暂时跳过，稍后重试"
-                    appendLog("暂时跳过：\(url)，原因：\(seconds) 秒无数据。")
-                    return .deferred
-                }
-                queueItems[idx].status = .failed
-                queueItems[idx].detail = "\(seconds) 秒无数据，重试后仍失败"
-                appendLog("重试后跳过：\(url)，原因：\(seconds) 秒无数据。")
-                return .failed("重试阶段 \(seconds) 秒无数据，已跳过。")
             case .skippedByUser:
-                if allowDeferredRetry {
-                    queueItems[idx].status = .pending
-                    queueItems[idx].detail = "已手动跳过，稍后重试"
-                    appendLog("已手动跳过：\(url)，将在重试阶段再次尝试。")
-                    return .deferred
-                }
                 queueItems[idx].status = .failed
-                queueItems[idx].detail = "重试阶段手动跳过"
-                appendLog("重试阶段手动跳过：\(url)")
-                return .failed("重试阶段手动跳过。")
+                queueItems[idx].detail = "已手动跳过"
+                appendLog("手动跳过：\(url)")
+                return .failed("已手动跳过。")
             }
         } catch is CancellationError {
             if stopRequested || Task.isCancelled {
                 return .failed("任务已停止。")
             }
-            if allowDeferredRetry {
-                queueItems[idx].status = .pending
-                queueItems[idx].detail = "已取消，稍后重试"
-                return .deferred
-            }
             queueItems[idx].status = .failed
-            queueItems[idx].detail = "重试阶段已取消"
-            return .failed("重试阶段任务取消。")
+            queueItems[idx].detail = "任务取消"
+            return .failed("任务取消。")
         } catch {
             queueItems[idx].status = .failed
             queueItems[idx].detail = error.localizedDescription
@@ -739,7 +694,7 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func shouldStopOrPause(firstPhaseIndex: Int, retryPhaseIndex: Int) -> Bool {
+    private func shouldStopOrPause(queueIndex: Int) -> Bool {
         if Task.isCancelled || stopRequested {
             crawlState = .idle
             isLoading = false
@@ -753,8 +708,7 @@ final class AppViewModel: ObservableObject {
             isLoading = false
             statusMessage = "已暂停，可点击开始继续。"
             appendLog("抓取队列已暂停。")
-            currentQueueIndex = firstPhaseIndex
-            retryQueueIndex = retryPhaseIndex
+            currentQueueIndex = queueIndex
             return true
         }
         return false
@@ -764,10 +718,7 @@ final class AppViewModel: ObservableObject {
         crawlState = .idle
         isLoading = false
         currentQueueIndex = 0
-        retryQueueIndex = 0
-        inRetryPhase = false
         queuedURLs = []
-        deferredRetryURLs = []
         manualSkipRequested = false
         currentImportTask = nil
         currentImportURL = ""
@@ -808,21 +759,39 @@ final class AppViewModel: ObservableObject {
         fetchPrecision = Double(finished) / Double(total)
     }
 
-    private func importOne(url: String, retries: Int, inactivityTimeout: TimeInterval = 30) async throws -> RepoRecord {
+    private func importOne(url: String, retries: Int) async throws -> RepoRecord {
         var lastError: Error?
         let maxAttempt = max(1, min(retries, 5))
 
         for attempt in 1...maxAttempt {
+            manualSkipRequested = false
+            currentImportURL = url
+            let task = Task<RepoRecord, Error> { [weak self] in
+                guard let self else { throw URLError(.unknown) }
+                return try await self.importOneAttempt(url: url)
+            }
+            currentImportTask = task
+
             do {
-                return try await importOneMonitoredAttempt(url: url, inactivityTimeout: inactivityTimeout)
-            } catch let control as CrawlControlError {
-                throw control
+                let record = try await task.value
+                currentImportTask = nil
+                currentImportURL = ""
+                manualSkipRequested = false
+                return record
             } catch is CancellationError {
+                currentImportTask = nil
+                currentImportURL = ""
                 if manualSkipRequested {
+                    manualSkipRequested = false
                     throw CrawlControlError.skippedByUser
                 }
-                throw CancellationError()
+                if stopRequested || Task.isCancelled {
+                    throw CancellationError()
+                }
+                lastError = CancellationError()
             } catch {
+                currentImportTask = nil
+                currentImportURL = ""
                 lastError = error
                 if attempt < maxAttempt {
                     statusMessage = "重试中 (\(attempt + 1)/\(maxAttempt))：\(url)"
@@ -834,69 +803,7 @@ final class AppViewModel: ObservableObject {
         throw lastError ?? URLError(.cannotParseResponse)
     }
 
-    private func importOneMonitoredAttempt(url: String, inactivityTimeout: TimeInterval) async throws -> RepoRecord {
-        manualSkipRequested = false
-        lastDataActivityAt = Date()
-        currentImportURL = url
-
-        let importTask = Task<RepoRecord, Error> { [weak self] in
-            guard let self else { throw URLError(.unknown) }
-            return try await self.importOneAttempt(url: url)
-        }
-        currentImportTask = importTask
-
-        defer {
-            currentImportTask = nil
-            currentImportURL = ""
-            manualSkipRequested = false
-        }
-
-        do {
-            return try await withThrowingTaskGroup(of: RepoRecord.self) { group in
-                group.addTask {
-                    try await importTask.value
-                }
-                group.addTask { [weak self] in
-                    guard let self else { throw URLError(.unknown) }
-                    while !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: 1_000_000_000)
-                        let snapshot = await MainActor.run {
-                            (Date().timeIntervalSince(self.lastDataActivityAt), self.manualSkipRequested)
-                        }
-                        if snapshot.1 {
-                            importTask.cancel()
-                            throw CrawlControlError.skippedByUser
-                        }
-                        if snapshot.0 >= inactivityTimeout {
-                            importTask.cancel()
-                            throw CrawlControlError.noDataTimeout(seconds: Int(inactivityTimeout))
-                        }
-                    }
-                    throw CancellationError()
-                }
-                guard let first = try await group.next() else {
-                    throw URLError(.cannotParseResponse)
-                }
-                group.cancelAll()
-                return first
-            }
-        } catch is CancellationError {
-            if stopRequested || Task.isCancelled {
-                throw CancellationError()
-            }
-            if manualSkipRequested {
-                throw CrawlControlError.skippedByUser
-            }
-            throw CrawlControlError.noDataTimeout(seconds: Int(inactivityTimeout))
-        }
-    }
-
-    private func markDataActivity() {
-        lastDataActivityAt = Date()
-    }
-
     private func importOneAttempt(url: String) async throws -> RepoRecord {
-        markDataActivity()
         let identity = try URLParser.parseGitHubRepo(from: url)
         let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -905,11 +812,8 @@ final class AppViewModel: ObservableObject {
         async let release = github.fetchLatestRelease(identity, token: token)
 
         let fetchedRepo = try await repo
-        markDataActivity()
         let fetchedReadme = await readme
-        markDataActivity()
         let fetchedRelease = try await release
-        markDataActivity()
         appendLog("已读取仓库数据：\(fetchedRepo.fullName)")
 
         let readmeOriginal = fetchedReadme.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -931,62 +835,35 @@ final class AppViewModel: ObservableObject {
             fallbackTitle: fetchedRepo.name
         )
 
-        let assets = fetchedRelease?.assets ?? []
-
-        let category: String
-        let hasDownloadAsset: Bool
-        let localPath: String
-        let sourceCodePath: String
-        let releaseTag: String
-        let releaseAssetName: String
-        let releaseAssetURL: String
-        let projectDir: URL
-        let previewImagePath: String
-
-        category = classifier.classify(repo: fetchedRepo, text: classifyText)
-        releaseTag = fetchedRelease?.tagName ?? "N/A"
-        projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
+        let category = classifier.classify(repo: fetchedRepo, text: classifyText)
+        let projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         currentSavePathText = projectDir.path
 
-        sourceCodePath = records.first(where: { $0.id == identity.fullName.lowercased() })?.sourceCodePath ?? ""
-
-        if assets.isEmpty {
-            hasDownloadAsset = false
-            localPath = ""
-            releaseAssetName = "无安装包"
-            releaseAssetURL = ""
+        let releaseTag = fetchedRelease?.tagName ?? "N/A"
+        let allAssets = fetchedRelease?.assets ?? []
+        let autoDownloadAssets = selectAutoDownloadAssets(from: allAssets)
+        let releaseAssetName = autoDownloadAssets.isEmpty
+            ? "无可下载安装包"
+            : "\(autoDownloadAssets.count) 个候选安装包（自动队列）"
+        let releaseAssetURL = autoDownloadAssets.map(\.browserDownloadURL.absoluteString).joined(separator: "\n")
+        let existing = records.first(where: { $0.id == identity.fullName.lowercased() })
+        let existingLocalPath = existing?.localPath ?? ""
+        let existingSourcePath = existing?.sourceCodePath ?? ""
+        let localPath: String
+        if !existingLocalPath.isEmpty && FileManager.default.fileExists(atPath: existingLocalPath) {
+            localPath = existingLocalPath
         } else {
-            var downloadedPaths: [String] = []
-            var urls: [String] = []
-            for asset in assets {
-                appendLog("下载链接：\(asset.browserDownloadURL.absoluteString)")
-                let downloaded = try await downloader.download(asset: asset, to: projectDir) { [weak self] progress in
-                    Task { @MainActor in
-                        self?.markDataActivity()
-                        self?.appendDownloadLog(assetName: asset.name, progress: progress)
-                    }
-                }
-                markDataActivity()
-                downloadedPaths.append(downloaded.path)
-                urls.append(asset.browserDownloadURL.absoluteString)
-                appendLog("已下载：\(asset.name)")
-            }
-            hasDownloadAsset = true
-            localPath = downloadedPaths.first ?? ""
-            releaseAssetName = assets.count == 1
-                ? assets[0].name
-                : "\(assets.count) 个安装包（\(assets.prefix(3).map(\.name).joined(separator: "、"))\(assets.count > 3 ? "..." : "")）"
-            releaseAssetURL = urls.joined(separator: "\n")
+            localPath = ""
         }
 
+        let previewImagePath: String
         if let imageURL = extractFirstImageURL(from: fetchedReadme, repo: identity) {
             previewImagePath = await downloader.downloadImage(from: imageURL, to: projectDir)
-            markDataActivity()
             if !previewImagePath.isEmpty {
                 appendLog("已保存预览图：\(previewImagePath)")
             }
         } else {
-            previewImagePath = ""
+            previewImagePath = existing?.previewImagePath ?? ""
         }
 
         let draft = RepoDraft(
@@ -1005,13 +882,318 @@ final class AppViewModel: ObservableObject {
             releaseTag: releaseTag,
             releaseAssetName: releaseAssetName,
             releaseAssetURL: releaseAssetURL,
-            hasDownloadAsset: hasDownloadAsset,
+            hasDownloadAsset: !localPath.isEmpty || !autoDownloadAssets.isEmpty,
             localPath: localPath,
-            sourceCodePath: sourceCodePath,
+            sourceCodePath: existingSourcePath,
             previewImagePath: previewImagePath
         )
 
-        return try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
+        let saved = try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
+        _ = enqueueDownloads(record: saved, assets: autoDownloadAssets, source: "自动抓取")
+        return saved
+    }
+
+    func refreshLatestAssetOptions(_ record: RepoRecord) async -> [LatestAssetOption] {
+        guard !record.sourceURL.isEmpty else {
+            errorMessage = "缺少仓库地址，无法刷新安装包列表。"
+            return []
+        }
+        do {
+            let identity = try URLParser.parseGitHubRepo(from: record.sourceURL)
+            let release = try await github.fetchLatestRelease(identity, token: githubToken)
+            guard let latest = release else {
+                statusMessage = "未找到可用 Release：\(record.fullName)"
+                return []
+            }
+
+            let installable = latest.assets.filter { asset in
+                isInstallableAsset(asset) && !isSourceArchiveAsset(asset)
+            }
+            let recommendedSet = Set(selectAutoDownloadAssets(from: latest.assets).map { $0.browserDownloadURL.absoluteString })
+            let downloaded = existingDownloadedAssetNames(record: record)
+            let options = installable.map { asset in
+                LatestAssetOption(
+                    id: asset.browserDownloadURL.absoluteString,
+                    asset: asset,
+                    alreadyDownloaded: downloaded.contains(asset.name),
+                    recommended: recommendedSet.contains(asset.browserDownloadURL.absoluteString)
+                )
+            }
+            statusMessage = "已实时刷新安装包：\(record.projectName)（共 \(options.count) 项）"
+            appendLog("实时刷新安装包：\(record.fullName) 共 \(options.count) 项。")
+            return options
+        } catch {
+            errorMessage = "刷新安装包失败：\(error.localizedDescription)"
+            appendLog("刷新安装包失败：\(record.fullName)，原因：\(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func enqueueManualDownloads(record: RepoRecord, assets: [GitHubAsset], source: String = "详情页勾选") {
+        guard !assets.isEmpty else { return }
+        let count = enqueueDownloads(record: record, assets: assets, source: source)
+        if count == 0 {
+            statusMessage = "所选文件已在队列中或已存在。"
+        } else {
+            statusMessage = "已加入下载队列：\(count) 项。"
+        }
+    }
+
+    @discardableResult
+    private func enqueueDownloads(record: RepoRecord, assets: [GitHubAsset], source: String) -> Int {
+        guard !assets.isEmpty else { return 0 }
+        let projectDir = storage.projectDir(baseDir: activeBaseDir, category: record.category, project: record.projectName)
+        var appended = 0
+        for asset in assets {
+            let key = asset.browserDownloadURL.absoluteString
+            let existsInQueue = downloadQueueItems.contains {
+                $0.recordID == record.id && $0.asset.browserDownloadURL.absoluteString == key
+            }
+            if existsInQueue {
+                continue
+            }
+            let destination = projectDir.appendingPathComponent(asset.name)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                continue
+            }
+            let item = DownloadQueueItem(
+                recordID: record.id,
+                projectName: record.projectName,
+                projectDirPath: projectDir.path,
+                asset: asset,
+                source: source,
+                status: .pending,
+                detail: "等待下载"
+            )
+            downloadQueueItems.append(item)
+            appended += 1
+            appendLog("加入下载队列：\(record.projectName) / \(asset.name)")
+        }
+        if appended > 0 {
+            ensureDownloadQueueRunning()
+        }
+        return appended
+    }
+
+    private func ensureDownloadQueueRunning() {
+        if isDownloadQueueRunning { return }
+        if downloadQueueTask != nil { return }
+        downloadQueueTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runDownloadQueue()
+        }
+    }
+
+    private func runDownloadQueue() async {
+        guard !isDownloadQueueRunning else { return }
+        isDownloadQueueRunning = true
+        defer {
+            isDownloadQueueRunning = false
+            downloadQueueTask = nil
+            if !downloadQueueItems.contains(where: { $0.status == .downloading }) {
+                downloadTrafficText = "空闲"
+            }
+            refreshStorageMetrics()
+        }
+
+        while true {
+            guard let idx = downloadQueueItems.firstIndex(where: { $0.status == .pending }) else {
+                break
+            }
+            if Task.isCancelled { break }
+
+            downloadQueueItems[idx].status = .downloading
+            downloadQueueItems[idx].detail = "正在下载"
+            let item = downloadQueueItems[idx]
+            let projectDir = URL(fileURLWithPath: item.projectDirPath, isDirectory: true)
+            appendLog("下载开始：\(item.projectName) / \(item.asset.name)")
+
+            do {
+                let downloaded = try await downloader.download(asset: item.asset, to: projectDir) { [weak self] progress in
+                    Task { @MainActor in
+                        self?.appendDownloadLog(assetName: item.asset.name, progress: progress)
+                    }
+                }
+                guard let currentIndex = downloadQueueItems.firstIndex(where: { $0.id == item.id }) else { continue }
+                downloadQueueItems[currentIndex].status = .success
+                downloadQueueItems[currentIndex].detail = "已下载到项目目录"
+                appendLog("下载完成：\(item.projectName) / \(item.asset.name)")
+                await updateRecordAfterDownload(item: item, downloadedPath: downloaded.path)
+            } catch {
+                guard let currentIndex = downloadQueueItems.firstIndex(where: { $0.id == item.id }) else { continue }
+                downloadQueueItems[currentIndex].status = .failed
+                downloadQueueItems[currentIndex].detail = error.localizedDescription
+                appendLog("下载失败：\(item.projectName) / \(item.asset.name)，原因：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func updateRecordAfterDownload(item: DownloadQueueItem, downloadedPath: String) async {
+        guard var record = records.first(where: { $0.id == item.recordID }) else {
+            reloadRecords()
+            guard var reloaded = records.first(where: { $0.id == item.recordID }) else { return }
+            if reloaded.localPath.isEmpty {
+                reloaded.localPath = downloadedPath
+            }
+            reloaded.hasDownloadAsset = true
+            let downloadURL = item.asset.browserDownloadURL.absoluteString
+            if !reloaded.releaseAssetURL.contains(downloadURL) {
+                if reloaded.releaseAssetURL.isEmpty {
+                    reloaded.releaseAssetURL = downloadURL
+                } else {
+                    reloaded.releaseAssetURL += "\n" + downloadURL
+                }
+            }
+            reloaded.releaseAssetName = buildInstalledAssetDisplayName(for: item.projectDirPath)
+            reloaded.updatedAt = Date()
+            do {
+                try storage.saveRecord(reloaded, baseDir: activeBaseDir)
+                reloadRecords()
+            } catch {
+                errorMessage = "更新下载结果失败：\(error.localizedDescription)"
+            }
+            return
+        }
+
+        if record.localPath.isEmpty {
+            record.localPath = downloadedPath
+        }
+        record.hasDownloadAsset = true
+        let downloadURL = item.asset.browserDownloadURL.absoluteString
+        if !record.releaseAssetURL.contains(downloadURL) {
+            if record.releaseAssetURL.isEmpty {
+                record.releaseAssetURL = downloadURL
+            } else {
+                record.releaseAssetURL += "\n" + downloadURL
+            }
+        }
+        record.releaseAssetName = buildInstalledAssetDisplayName(for: item.projectDirPath)
+        record.updatedAt = Date()
+        do {
+            try storage.saveRecord(record, baseDir: activeBaseDir)
+            reloadRecords()
+        } catch {
+            errorMessage = "更新下载结果失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func buildInstalledAssetDisplayName(for projectDirPath: String) -> String {
+        let dir = URL(fileURLWithPath: projectDirPath, isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return "已下载安装包"
+        }
+        let names = files
+            .filter { url in
+                let lower = url.lastPathComponent.lowercased()
+                if lower == "project_info.json" || lower == "readme_collector.md" { return false }
+                let asset = GitHubAsset(name: url.lastPathComponent, browserDownloadURL: URL(string: "https://example.com")!, size: 0)
+                return isInstallableAsset(asset) && !isSourceArchiveAsset(asset)
+            }
+            .map(\.lastPathComponent)
+            .sorted()
+        guard !names.isEmpty else { return "已下载安装包" }
+        if names.count == 1 {
+            return names[0]
+        }
+        let prefix = names.prefix(3).joined(separator: "、")
+        return "\(names.count) 个安装包（\(prefix)\(names.count > 3 ? "..." : "")）"
+    }
+
+    private func existingDownloadedAssetNames(record: RepoRecord) -> Set<String> {
+        let projectDir = storage.projectDir(baseDir: activeBaseDir, category: record.category, project: record.projectName)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: projectDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return Set(files.map(\.lastPathComponent))
+    }
+
+    private func selectAutoDownloadAssets(from assets: [GitHubAsset]) -> [GitHubAsset] {
+        let installable = assets.filter { asset in
+            isInstallableAsset(asset) && !isSourceArchiveAsset(asset)
+        }
+        guard !installable.isEmpty else { return [] }
+
+        if installable.count <= 5 {
+            return installable
+        }
+
+        let focused = installable.filter { isPlatformFocusedAsset($0) }
+        if focused.isEmpty {
+            return installable.sorted { assetPriorityScore($0) > assetPriorityScore($1) }
+        }
+        return focused.sorted { assetPriorityScore($0) > assetPriorityScore($1) }
+    }
+
+    private func isInstallableAsset(_ asset: GitHubAsset) -> Bool {
+        let lower = asset.name.lowercased()
+        let directExts = [
+            ".dmg", ".pkg", ".app", ".exe", ".msi", ".msix", ".apk", ".ipa",
+            ".deb", ".rpm", ".appimage", ".flatpak", ".run", ".bin", ".jar", ".whl"
+        ]
+        if directExts.contains(where: { lower.hasSuffix($0) }) {
+            return true
+        }
+
+        let archiveExts = [".zip", ".7z", ".tar.gz", ".tgz", ".tar.xz", ".xz"]
+        if archiveExts.contains(where: { lower.hasSuffix($0) }) {
+            return true
+        }
+
+        let installKeywords = [
+            "installer", "setup", "portable", "windows", "win", "mac", "darwin", "osx",
+            "ios", "android", "linux", "arm", "x86", "amd64", "aarch64"
+        ]
+        return installKeywords.contains(where: { lower.contains($0) })
+    }
+
+    private func isSourceArchiveAsset(_ asset: GitHubAsset) -> Bool {
+        let lower = asset.name.lowercased()
+        if lower.contains("source code") || lower.contains("sources") || lower.contains("source.tar") || lower.contains("source.zip") {
+            return true
+        }
+        if lower == "src.zip" || lower == "src.tar.gz" || lower == "source.zip" || lower == "source.tar.gz" {
+            return true
+        }
+        if lower.contains("源码") || lower.contains("源代码") {
+            return true
+        }
+        return false
+    }
+
+    private func isPlatformFocusedAsset(_ asset: GitHubAsset) -> Bool {
+        let lower = asset.name.lowercased()
+        let platformKeywords = [
+            "windows", "win", "mac", "macos", "darwin", "osx", "ios", "android", "apk", "ipa", "exe", "msi"
+        ]
+        let archKeywords = ["x86", "x64", "amd64", "arm", "arm64", "aarch64"]
+        return platformKeywords.contains(where: { lower.contains($0) }) ||
+            archKeywords.contains(where: { lower.contains($0) })
+    }
+
+    private func assetPriorityScore(_ asset: GitHubAsset) -> Int {
+        let lower = asset.name.lowercased()
+        var score = 0
+
+        if lower.contains("windows") || lower.contains("win") { score += 40 }
+        if lower.contains("mac") || lower.contains("darwin") || lower.contains("osx") { score += 40 }
+        if lower.contains("ios") || lower.hasSuffix(".ipa") { score += 35 }
+        if lower.contains("android") || lower.hasSuffix(".apk") { score += 35 }
+        if lower.contains("x86") || lower.contains("x64") || lower.contains("amd64") { score += 25 }
+        if lower.contains("arm") || lower.contains("arm64") || lower.contains("aarch64") { score += 25 }
+
+        if lower.hasSuffix(".dmg") || lower.hasSuffix(".pkg") { score += 20 }
+        if lower.hasSuffix(".exe") || lower.hasSuffix(".msi") || lower.hasSuffix(".apk") || lower.hasSuffix(".ipa") { score += 20 }
+        if lower.hasSuffix(".zip") || lower.hasSuffix(".tar.gz") || lower.hasSuffix(".tgz") { score += 8 }
+
+        return score
     }
 
     private func runSyncLibrary() async {

@@ -36,6 +36,9 @@ struct ContentView: View {
                     if !vm.queueItems.isEmpty {
                         queuePanel
                     }
+                    if !vm.downloadQueueItems.isEmpty {
+                        downloadQueuePanel
+                    }
 
                     categoryPanel
 
@@ -84,7 +87,11 @@ struct ContentView: View {
             RepoDetailView(
                 record: record,
                 onPullSource: { vm.pullSourceCode(record) },
-                onOptimizeText: { vm.optimizeRecordText(record) }
+                onOptimizeText: { vm.optimizeRecordText(record) },
+                onRefreshAssets: { await vm.refreshLatestAssetOptions(record) },
+                onEnqueueAssets: { assets in
+                    vm.enqueueManualDownloads(record: record, assets: assets)
+                }
             ) {
                 detailRecord = nil
             }
@@ -198,6 +205,16 @@ struct ContentView: View {
                             .frame(width: 70, alignment: .leading)
                         Text(vm.downloadTrafficText)
                             .font(.caption)
+                            .lineLimit(2)
+                    }
+                    HStack(alignment: .top) {
+                        Text("下载队列")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 70, alignment: .leading)
+                        Text(vm.downloadQueueSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
                     HStack(alignment: .top) {
@@ -438,10 +455,52 @@ struct ContentView: View {
         }
     }
 
+    private var downloadQueuePanel: some View {
+        GroupBox("下载队列") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(vm.downloadQueueSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(vm.downloadQueueItems) { item in
+                            HStack {
+                                Text(item.status.rawValue)
+                                    .font(.caption)
+                                    .foregroundStyle(color(for: item.status))
+                                    .frame(width: 52, alignment: .leading)
+                                Text("\(item.projectName) / \(item.asset.name)")
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 8)
+                                Text(item.detail)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .padding(4)
+                }
+                .frame(height: 120)
+            }
+        }
+    }
+
     private func color(for status: AppViewModel.QueueItem.Status) -> Color {
         switch status {
         case .pending: return .secondary
         case .running: return .orange
+        case .success: return .green
+        case .failed: return .red
+        }
+    }
+
+    private func color(for status: AppViewModel.DownloadQueueItem.Status) -> Color {
+        switch status {
+        case .pending: return .secondary
+        case .downloading: return .orange
         case .success: return .green
         case .failed: return .red
         }
@@ -602,8 +661,15 @@ private struct RepoDetailView: View {
     let record: RepoRecord
     let onPullSource: () -> Void
     let onOptimizeText: () -> Void
+    let onRefreshAssets: () async -> [AppViewModel.LatestAssetOption]
+    let onEnqueueAssets: ([GitHubAsset]) -> Void
     let onClose: () -> Void
     @State private var renderMarkdown = true
+    @State private var showAssetPicker = false
+    @State private var isRefreshingAssets = false
+    @State private var assetOptions: [AppViewModel.LatestAssetOption] = []
+    @State private var selectedAssetIDs: Set<String> = []
+    @State private var assetStatusMessage: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -666,8 +732,34 @@ private struct RepoDetailView: View {
                     .buttonStyle(.bordered)
                     Button("文本优化", action: onOptimizeText)
                         .buttonStyle(.bordered)
+                    Button(isRefreshingAssets ? "刷新中..." : "实时再抓取安装包") {
+                        isRefreshingAssets = true
+                        assetStatusMessage = "正在刷新最新安装包列表..."
+                        Task {
+                            let options = await onRefreshAssets()
+                            await MainActor.run {
+                                assetOptions = options
+                                selectedAssetIDs = Set(options.filter { $0.recommended && !$0.alreadyDownloaded }.map(\.id))
+                                isRefreshingAssets = false
+                                if options.isEmpty {
+                                    assetStatusMessage = "未找到可下载安装包。"
+                                } else {
+                                    assetStatusMessage = "已获取 \(options.count) 个安装包，请勾选后入队。"
+                                    showAssetPicker = true
+                                }
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRefreshingAssets)
                 }
                 .padding(.bottom, 4)
+                if !assetStatusMessage.isEmpty {
+                    Text(assetStatusMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -705,6 +797,17 @@ private struct RepoDetailView: View {
             }
         }
         .padding(16)
+        .sheet(isPresented: $showAssetPicker) {
+            AssetPickerSheet(
+                options: assetOptions,
+                selectedIDs: $selectedAssetIDs
+            ) { selected in
+                onEnqueueAssets(selected)
+                assetStatusMessage = selected.isEmpty ? "未选择文件。" : "已将 \(selected.count) 个文件加入下载队列。"
+                showAssetPicker = false
+            }
+            .frame(minWidth: 760, minHeight: 520)
+        }
     }
 
     private var originalReadmeBundle: String {
@@ -749,6 +852,89 @@ private struct RepoDetailView: View {
             }
             Divider()
         }
+    }
+}
+
+private struct AssetPickerSheet: View {
+    let options: [AppViewModel.LatestAssetOption]
+    @Binding var selectedIDs: Set<String>
+    let onConfirm: ([GitHubAsset]) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("待下载安装包")
+                    .font(.title3).bold()
+                Spacer()
+                Text("仅展示可安装文件（已排除源码压缩包）")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(options) { option in
+                        Toggle(isOn: Binding(
+                            get: { selectedIDs.contains(option.id) },
+                            set: { enabled in
+                                if enabled {
+                                    selectedIDs.insert(option.id)
+                                } else {
+                                    selectedIDs.remove(option.id)
+                                }
+                            }
+                        )) {
+                            HStack(spacing: 8) {
+                                Text(option.asset.name)
+                                    .font(.system(size: 12, design: .monospaced))
+                                if option.recommended {
+                                    Text("推荐")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.green.opacity(0.2))
+                                        .clipShape(Capsule())
+                                }
+                                if option.alreadyDownloaded {
+                                    Text("已存在")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.orange.opacity(0.2))
+                                        .clipShape(Capsule())
+                                }
+                                Spacer()
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        Divider()
+                    }
+                }
+                .padding(6)
+            }
+            .background(Color(NSColor.textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            HStack {
+                Text("已选 \(selectedIDs.count) / \(options.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                Button("加入下载队列") {
+                    let selected = options
+                        .filter { selectedIDs.contains($0.id) }
+                        .map(\.asset)
+                    onConfirm(selected)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
     }
 }
 
