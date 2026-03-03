@@ -215,13 +215,18 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 ProgressView(value: vm.fetchPrecision, total: 1.0)
-                HStack {
-                    Text("本次流量：\(formatBytes(vm.sessionTrafficBytes))")
-                    Spacer()
-                    Text("累计流量：\(formatBytes(vm.totalTrafficBytes))")
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+
+                Text("保存路径：\(vm.activeBaseDirPath)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("目录占用：\(formatBytes(vm.storageUsedBytes))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("本次流量：\(formatBytes(vm.sessionTrafficBytes))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             GroupBox("实时日志") {
@@ -657,8 +662,7 @@ private struct RepoDetailView: View {
     let retranslate: () -> Void
     let refetch: () -> Void
     @State private var showENDescription = false
-    @State private var showENReleaseNotes = false
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
@@ -742,13 +746,15 @@ private struct RepoDetailView: View {
                     }
                     section(
                         "简介（中文）",
-                        record.descriptionZH.isEmpty ? "暂无中文简介" : record.descriptionZH,
+                        renderMarkdown
+                            ? (record.descriptionZH.isEmpty ? "暂无中文简介" : record.descriptionZH)
+                            : (record.descriptionEN.isEmpty ? "暂无 README 原文" : record.descriptionEN),
                         renderMarkdown: renderMarkdown,
                         height: 360
                     )
-                    DisclosureGroup("更新说明（中文）", isExpanded: $showZHReleaseNotes) {
+                    DisclosureGroup("更新说明", isExpanded: $showZHReleaseNotes) {
                         section(
-                            "更新说明（中文）",
+                            "更新说明",
                             record.releaseNotesZH.isEmpty ? "暂无中文更新说明" : record.releaseNotesZH,
                             renderMarkdown: renderMarkdown
                         )
@@ -771,17 +777,10 @@ private struct RepoDetailView: View {
                             )
                         }
                     }
-                    DisclosureGroup("Description (EN)", isExpanded: $showENDescription) {
+                    DisclosureGroup("README.md", isExpanded: $showENDescription) {
                         section(
-                            "Description (EN)",
-                            record.descriptionEN.isEmpty ? "No description" : record.descriptionEN,
-                            renderMarkdown: renderMarkdown
-                        )
-                    }
-                    DisclosureGroup("Release Notes (EN)", isExpanded: $showENReleaseNotes) {
-                        section(
-                            "Release Notes (EN)",
-                            record.releaseNotesEN.isEmpty ? "No release notes" : record.releaseNotesEN,
+                            "README.md",
+                            combinedReadmeMarkdown,
                             renderMarkdown: renderMarkdown
                         )
                     }
@@ -790,6 +789,23 @@ private struct RepoDetailView: View {
             }
         }
         .padding(16)
+    }
+
+    private var combinedReadmeMarkdown: String {
+        let readme = record.descriptionEN.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = record.releaseNotesEN.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var chunks: [String] = []
+        if !readme.isEmpty {
+            chunks.append(readme)
+        }
+        if !notes.isEmpty {
+            chunks.append("\n\n---\n\n## Release Notes\n\n" + notes)
+        }
+        if chunks.isEmpty {
+            return "暂无 README 原文与更新记录。"
+        }
+        return chunks.joined(separator: "")
     }
 
     private func section(_ title: String, _ text: String, renderMarkdown: Bool, height: CGFloat = 220) -> some View {

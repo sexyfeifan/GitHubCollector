@@ -64,13 +64,25 @@ struct GitHubService {
 
     func fetchReadmeText(_ identity: RepoIdentity, token: String) async -> String {
         do {
-            let url = URL(string: "https://raw.githubusercontent.com/\(identity.owner)/\(identity.name)/HEAD/README.md")!
-            let request = makeRequest(url: url, token: token)
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            let apiURL = URL(string: "https://api.github.com/repos/\(identity.owner)/\(identity.name)/readme")!
+            var apiRequest = makeRequest(url: apiURL, token: token)
+            apiRequest.setValue("application/vnd.github.raw", forHTTPHeaderField: "Accept")
+
+            let (apiData, apiResponse) = try await session.data(for: apiRequest)
+            if let http = apiResponse as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                let raw = String(data: apiData, encoding: .utf8) ?? ""
+                if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return raw
+                }
+            }
+
+            let fallback = URL(string: "https://raw.githubusercontent.com/\(identity.owner)/\(identity.name)/HEAD/README.md")!
+            let fallbackRequest = makeRequest(url: fallback, token: token)
+            let (fallbackData, fallbackResponse) = try await session.data(for: fallbackRequest)
+            guard let http = fallbackResponse as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 return ""
             }
-            return String(data: data, encoding: .utf8) ?? ""
+            return String(data: fallbackData, encoding: .utf8) ?? ""
         } catch {
             return ""
         }
@@ -95,6 +107,13 @@ struct GitHubService {
         }
 
         return try decoder.decode(GitHubRelease.self, from: data)
+    }
+
+    func selectAssetsForDownload(from assets: [GitHubAsset], onlyMacOS: Bool = false) -> [GitHubAsset] {
+        if onlyMacOS {
+            return assets.filter { isInstallableAsset($0.name.lowercased(), onlyMacOS: true) }
+        }
+        return assets
     }
 
     func selectBestAsset(from assets: [GitHubAsset], onlyMacOS: Bool = false) -> GitHubAsset? {

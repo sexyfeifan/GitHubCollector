@@ -31,6 +31,32 @@ struct StorageService {
         try fm.createDirectory(at: baseDir, withIntermediateDirectories: true)
     }
 
+    func directorySize(at url: URL) -> Int64 {
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
+        if !isDir.boolValue {
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        }
+
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            if values?.isRegularFile == true {
+                total += Int64(values?.fileSize ?? 0)
+            }
+        }
+        return total
+    }
+
     func categoryDir(baseDir: URL, _ category: String) -> URL {
         baseDir.appendingPathComponent(safe(category), isDirectory: true)
     }

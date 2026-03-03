@@ -12,6 +12,25 @@ struct DownloadProgressInfo {
     }
 }
 
+struct RepoSyncResult {
+    let localPath: String
+    let cloned: Bool
+}
+
+enum DownloadServiceError: Error, LocalizedError {
+    case gitUnavailable
+    case gitFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .gitUnavailable:
+            return "系统未找到 git 命令。"
+        case .gitFailed(let output):
+            return "同步仓库失败：\(output)"
+        }
+    }
+}
+
 struct DownloadService {
     private let fm = FileManager.default
 
@@ -31,6 +50,26 @@ struct DownloadService {
         let tmpURL = try await helper.start()
         try fm.moveItem(at: tmpURL, to: destination)
         return destination
+    }
+
+    func syncRepository(identity: RepoIdentity, to projectDir: URL) async throws -> RepoSyncResult {
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+
+        let repoDir = projectDir.appendingPathComponent("source", isDirectory: true)
+        let gitMetadata = repoDir.appendingPathComponent(".git", isDirectory: true)
+        let remote = "https://github.com/\(identity.owner)/\(identity.name).git"
+
+        if fm.fileExists(atPath: gitMetadata.path) {
+            _ = try await runGit(arguments: ["-C", repoDir.path, "pull", "--ff-only"])
+            return RepoSyncResult(localPath: repoDir.path, cloned: false)
+        }
+
+        if fm.fileExists(atPath: repoDir.path) {
+            return RepoSyncResult(localPath: repoDir.path, cloned: false)
+        }
+
+        _ = try await runGit(arguments: ["clone", "--depth", "1", remote, repoDir.path])
+        return RepoSyncResult(localPath: repoDir.path, cloned: true)
     }
 
     func downloadImage(from url: URL, to projectDir: URL) async -> String {
@@ -57,6 +96,41 @@ struct DownloadService {
             return "preview_image.jpg"
         }
         return "preview_" + last
+    }
+
+    private func runGit(arguments: [String]) async throws -> String {
+        let gitPath = "/usr/bin/git"
+        guard fm.isExecutableFile(atPath: gitPath) else {
+            throw DownloadServiceError.gitUnavailable
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: gitPath)
+            process.arguments = arguments
+
+            let out = Pipe()
+            let err = Pipe()
+            process.standardOutput = out
+            process.standardError = err
+
+            process.terminationHandler = { proc in
+                let stdout = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let merged = (stdout + "\n" + stderr).trimmingCharacters(in: .whitespacesAndNewlines)
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: merged)
+                } else {
+                    continuation.resume(throwing: DownloadServiceError.gitFailed(merged.isEmpty ? "git exit \(proc.terminationStatus)" : merged))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }
 

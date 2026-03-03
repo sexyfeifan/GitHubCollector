@@ -114,6 +114,7 @@ final class AppViewModel: ObservableObject {
     @Published var reorgPreviewItems: [ReorgPreviewItem] = []
     @Published var crawlState: CrawlState = .idle
     @Published var sessionTrafficBytes: Int64 = 0
+    @Published var storageUsedBytes: Int64 = 0
     @Published var totalTrafficBytes: Int64 = 0
     @Published var openAIPromptTokens: Int = 0
     @Published var openAICompletionTokens: Int = 0
@@ -618,6 +619,7 @@ final class AppViewModel: ObservableObject {
             self.records = records
             self.knownRecordIDs = Set(records.map { $0.id })
             reloadKnownURLs()
+            refreshStorageUsage()
             ensureValidCategorySelection()
             ensureValidPage()
         } catch {
@@ -951,62 +953,61 @@ final class AppViewModel: ObservableObject {
         let fetchedRelease = try await release
         appendLog("已读取仓库数据：\(fetchedRepo.fullName)")
 
-        let cleanReadme = cleanReadmeContent(fetchedReadme)
-        let englishDescription = mergedDescription(repo: fetchedRepo, readme: cleanReadme)
-        let releaseNotesEN = cleanReadmeContent(fetchedRelease?.body ?? "")
-        let setupGuideEN = setupGuideExtractor.extract(from: fetchedReadme)
+        let rawReadme = fetchedReadme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let readmeOriginalEN = rawReadme.isEmpty
+            ? (fetchedRepo.description ?? "")
+            : rawReadme
+        let readmeForClassify = cleanReadmeContent(readmeOriginalEN)
+        let classifyText = mergedDescription(repo: fetchedRepo, readme: readmeForClassify)
+
+        let releaseNotesEN = fetchedRelease?.body ?? ""
+        let setupGuideEN = setupGuideExtractor.extract(from: readmeOriginalEN + "\n\n" + releaseNotesEN)
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        let descResult = await translator.translateToChineseDetailed(englishDescription, config: config)
+        let readmeForAI = String(readmeOriginalEN.prefix(18_000))
+
+        let introResult = await translator.summarizeReadmeToChineseDetailed(readmeForAI, config: config)
+        addOpenAIUsage(introResult.usage)
+
         let noteResult = await translator.translateToChineseDetailed(releaseNotesEN, config: config)
-        let chineseDescription = descResult.text
-        let chineseReleaseNotes = noteResult.text
-        addOpenAIUsage(descResult.usage)
         addOpenAIUsage(noteResult.usage)
 
+        let chineseDescription = introResult.text
+        let chineseReleaseNotes = noteResult.text
         let summary = summarizer.summarize(
-            chineseDescription.isEmpty ? englishDescription : chineseDescription,
+            chineseDescription.isEmpty ? readmeForAI : chineseDescription,
             fallbackTitle: fetchedRepo.name
         )
 
-        let selectedAsset = fetchedRelease.flatMap { github.selectBestAsset(from: $0.assets, onlyMacOS: onlyMacOSAssets) }
+        let category = classifier.classify(repo: fetchedRepo, text: classifyText)
+        let releaseTag = fetchedRelease?.tagName ?? "N/A"
+        let releaseAssets = github.selectAssetsForDownload(from: fetchedRelease?.assets ?? [], onlyMacOS: onlyMacOSAssets)
+        let projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
 
-        let category: String
-        let hasDownloadAsset: Bool
-        let localPath: String
-        let releaseTag: String
-        let releaseAssetName: String
-        let releaseAssetURL: String
-        let projectDir: URL
-        let previewImagePath: String
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
 
-        if let asset = selectedAsset {
-            category = classifier.classify(repo: fetchedRepo, text: englishDescription)
-            releaseTag = resolveVersion(from: asset.name, fallback: fetchedRelease?.tagName ?? "N/A")
-            releaseAssetName = asset.name
-            releaseAssetURL = asset.browserDownloadURL.absoluteString
-            projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
-            appendLog("下载链接：\(asset.browserDownloadURL.absoluteString)")
-            let downloaded = try await downloader.download(asset: asset, to: projectDir) { [weak self] progress in
-                Task { @MainActor in
-                    self?.appendDownloadLog(assetName: asset.name, progress: progress)
+        let repoSync = try await downloader.syncRepository(identity: identity, to: projectDir)
+        if !repoSync.localPath.isEmpty {
+            appendLog(repoSync.cloned ? "已同步源码：\(repoSync.localPath)" : "已更新源码：\(repoSync.localPath)")
+            if repoSync.cloned {
+                addTrafficFromDirectory(path: repoSync.localPath)
+            }
+        }
+
+        var downloadedFiles: [URL] = []
+        if !releaseAssets.isEmpty {
+            appendLog("最新 Release 资产数量：\(releaseAssets.count)，开始全量下载。")
+            for asset in releaseAssets {
+                appendLog("下载链接：\(asset.browserDownloadURL.absoluteString)")
+                let downloaded = try await downloader.download(asset: asset, to: projectDir) { [weak self] progress in
+                    Task { @MainActor in
+                        self?.appendDownloadLog(assetName: asset.name, progress: progress)
+                    }
                 }
+                downloadedFiles.append(downloaded)
+                appendLog("已下载：\(asset.name)")
+                addTrafficFromFile(path: downloaded.path)
             }
-            hasDownloadAsset = true
-            localPath = downloaded.path
-            appendLog("已下载：\(asset.name)")
-            addTrafficFromFile(path: downloaded.path)
-        } else {
-            guard includeNoPackageProjects else {
-                throw ImportError.noDownloadAssetSkipped
-            }
-            category = classifier.classify(repo: fetchedRepo, text: englishDescription)
-            releaseTag = fetchedRelease?.tagName ?? "N/A"
-            releaseAssetName = "无安装包"
-            releaseAssetURL = ""
-            hasDownloadAsset = false
-            localPath = ""
-            projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         }
 
         if Task.isCancelled || stopRequested {
@@ -1014,6 +1015,7 @@ final class AppViewModel: ObservableObject {
             throw CancellationError()
         }
 
+        let previewImagePath: String
         if let imageURL = extractFirstImageURL(from: fetchedReadme, repo: identity) {
             previewImagePath = await downloader.downloadImage(from: imageURL, to: projectDir)
             if !previewImagePath.isEmpty {
@@ -1024,11 +1026,30 @@ final class AppViewModel: ObservableObject {
             previewImagePath = ""
         }
 
+        let firstDownloaded = downloadedFiles.first?.path ?? repoSync.localPath
+        let assetNameSummary: String
+        let assetURLSummary: String
+        let hasDownloadAsset: Bool
+
+        if releaseAssets.isEmpty {
+            hasDownloadAsset = false
+            assetNameSummary = "无 Release 包（已同步源码）"
+            assetURLSummary = ""
+        } else {
+            hasDownloadAsset = true
+            if releaseAssets.count == 1 {
+                assetNameSummary = releaseAssets[0].name
+            } else {
+                assetNameSummary = "共\(releaseAssets.count)个包（首个：\(releaseAssets[0].name)）"
+            }
+            assetURLSummary = releaseAssets[0].browserDownloadURL.absoluteString
+        }
+
         let draft = RepoDraft(
             identity: identity,
             projectName: fetchedRepo.name,
             sourceURL: fetchedRepo.htmlURL,
-            descriptionEN: englishDescription,
+            descriptionEN: readmeOriginalEN,
             descriptionZH: chineseDescription,
             summaryZH: summary,
             releaseNotesEN: releaseNotesEN,
@@ -1040,14 +1061,15 @@ final class AppViewModel: ObservableObject {
             stars: fetchedRepo.stargazersCount,
             isFork: fetchedRepo.fork ?? false,
             releaseTag: releaseTag,
-            releaseAssetName: releaseAssetName,
-            releaseAssetURL: releaseAssetURL,
+            releaseAssetName: assetNameSummary,
+            releaseAssetURL: assetURLSummary,
             hasDownloadAsset: hasDownloadAsset,
-            localPath: localPath,
+            localPath: firstDownloaded,
             previewImagePath: previewImagePath
         )
         let saved = try storage.saveOrUpdate(draft, baseDir: activeBaseDir)
         rememberKnownURLs([saved.sourceURL])
+        refreshStorageUsage()
         return saved
     }
 
@@ -1099,14 +1121,14 @@ final class AppViewModel: ObservableObject {
     private func syncRecordIfNeeded(_ record: RepoRecord) async throws -> Bool {
         let identity = try URLParser.parseGitHubRepo(from: record.sourceURL)
         let latestRelease = try await github.fetchLatestRelease(identity, token: githubToken)
-        guard
-            let release = latestRelease,
-            let latestAsset = github.selectBestAsset(from: release.assets, onlyMacOS: onlyMacOSAssets)
-        else {
+        guard let release = latestRelease else {
             return false
         }
 
-        let latestVersion = resolveVersion(from: latestAsset.name, fallback: release.tagName)
+        let latestVersion = release.tagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (github.selectBestAsset(from: release.assets, onlyMacOS: onlyMacOSAssets).map { resolveVersion(from: $0.name, fallback: release.tagName) } ?? record.releaseTag)
+            : release.tagName
+
         if latestVersion == record.releaseTag {
             appendLog("无需更新：\(record.fullName) 当前 \(record.releaseTag)")
             return false
@@ -1326,11 +1348,26 @@ final class AppViewModel: ObservableObject {
     private func addTrafficFromFile(path: String) {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let fileSize = attrs[.size] as? NSNumber else { return }
-        let bytes = fileSize.int64Value
+        addTraffic(bytes: fileSize.int64Value)
+    }
+
+    private func addTrafficFromDirectory(path: String) {
+        let bytes = storage.directorySize(at: URL(fileURLWithPath: path))
+        guard bytes > 0 else { return }
+        addTraffic(bytes: bytes)
+    }
+
+    private func addTraffic(bytes: Int64) {
+        guard bytes > 0 else { return }
         sessionTrafficBytes += bytes
         totalTrafficBytes += bytes
         settings.saveTotalTrafficBytes(totalTrafficBytes)
-        appendLog("流量统计：本次 \(formatBytes(Double(sessionTrafficBytes)))，累计 \(formatBytes(Double(totalTrafficBytes)))")
+        refreshStorageUsage()
+        appendLog("流量统计：本次 \(formatBytes(Double(sessionTrafficBytes)))")
+    }
+
+    private func refreshStorageUsage() {
+        storageUsedBytes = storage.directorySize(at: activeBaseDir)
     }
 
     private func appendDownloadLog(assetName: String, progress: DownloadProgressInfo) {
