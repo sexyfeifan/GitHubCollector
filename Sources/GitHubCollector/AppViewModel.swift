@@ -9,6 +9,26 @@ final class AppViewModel: ObservableObject {
         case paused
     }
 
+    enum CrawlControlError: Error, LocalizedError {
+        case noDataTimeout(seconds: Int)
+        case skippedByUser
+
+        var errorDescription: String? {
+            switch self {
+            case .noDataTimeout(let seconds):
+                return "\(seconds) 秒内无数据进入，已跳过。"
+            case .skippedByUser:
+                return "已手动跳过当前项目。"
+            }
+        }
+    }
+
+    private enum QueueProcessOutcome {
+        case success
+        case deferred
+        case failed(String)
+    }
+
     struct QueueItem: Identifiable {
         enum Status: String {
             case pending = "待处理"
@@ -31,6 +51,7 @@ final class AppViewModel: ObservableObject {
     }
 
     @Published var inputURL: String = ""
+    let appVersion: String = AppVersionResolver.currentVersionDisplay()
     @Published var isLoading = false
     @Published var statusMessage: String = ""
     @Published var errorMessage: String = ""
@@ -62,8 +83,15 @@ final class AppViewModel: ObservableObject {
     private var downloadLogTick: [String: Date] = [:]
     private var queuedURLs: [String] = []
     private var currentQueueIndex: Int = 0
+    private var deferredRetryURLs: [String] = []
+    private var retryQueueIndex: Int = 0
+    private var inRetryPhase = false
     private var pauseRequested = false
     private var stopRequested = false
+    private var manualSkipRequested = false
+    private var lastDataActivityAt = Date()
+    private var currentImportURL: String = ""
+    private var currentImportTask: Task<RepoRecord, Error>?
     private var queueTask: Task<Void, Never>?
     private var lastSavedSettingsSnapshot = AppSettings()
 
@@ -136,6 +164,7 @@ final class AppViewModel: ObservableObject {
 
     var canPauseCrawl: Bool { crawlState == .running }
     var canStopCrawl: Bool { crawlState != .idle }
+    var canSkipCurrent: Bool { crawlState == .running && currentImportTask != nil }
 
     func nextPage() {
         currentPage = min(currentPage + 1, totalPages)
@@ -416,6 +445,8 @@ final class AppViewModel: ObservableObject {
         guard crawlState != .idle else { return }
         stopRequested = true
         pauseRequested = false
+        manualSkipRequested = false
+        currentImportTask?.cancel()
         queueTask?.cancel()
         queueTask = nil
         crawlState = .idle
@@ -423,6 +454,15 @@ final class AppViewModel: ObservableObject {
         statusMessage = "已停止抓取。"
         downloadTrafficText = "空闲"
         appendLog("抓取已停止。")
+    }
+
+    func skipCurrentProject() {
+        guard canSkipCurrent else { return }
+        manualSkipRequested = true
+        let current = currentImportURL.isEmpty ? "当前项目" : currentImportURL
+        statusMessage = "已请求跳过：\(current)"
+        appendLog("手动跳过请求：\(current)")
+        currentImportTask?.cancel()
     }
 
     func retryFailedImports() {
@@ -516,6 +556,13 @@ final class AppViewModel: ObservableObject {
         failedProjects = []
         queuedURLs = urls
         currentQueueIndex = 0
+        deferredRetryURLs = []
+        retryQueueIndex = 0
+        inRetryPhase = false
+        manualSkipRequested = false
+        currentImportURL = ""
+        currentImportTask = nil
+        lastDataActivityAt = Date()
         queueItems = urls.map { QueueItem(url: $0, status: .pending, detail: "等待开始") }
     }
 
@@ -534,96 +581,225 @@ final class AppViewModel: ObservableObject {
         crawlState = .running
         isLoading = true
         let urls = queuedURLs
-        appendLog("开始抓取队列，共 \(urls.count) 条。")
+        if !inRetryPhase && currentQueueIndex == 0 {
+            appendLog("开始抓取队列，共 \(urls.count) 条。")
+        }
 
         defer {
             queueTask = nil
         }
 
-        var i = currentQueueIndex
-        while i < urls.count {
-            if Task.isCancelled || stopRequested {
-                crawlState = .idle
-                isLoading = false
-                statusMessage = "已停止抓取。"
-                appendLog("抓取队列停止。")
-                return
-            }
+        if !inRetryPhase {
+            var i = currentQueueIndex
+            while i < urls.count {
+                if shouldStopOrPause(firstPhaseIndex: i, retryPhaseIndex: retryQueueIndex) {
+                    return
+                }
 
-            if pauseRequested {
-                crawlState = .paused
-                isLoading = false
-                statusMessage = "已暂停，可点击开始继续。"
-                appendLog("抓取队列已暂停。")
-                currentQueueIndex = i
-                return
-            }
-
-            queueItems[i].status = .running
-            queueItems[i].detail = "开始抓取"
-            statusMessage = "(\(i + 1)/\(urls.count)) 处理中：\(urls[i])"
-            appendLog("开始抓取：\(urls[i])")
-
-            do {
-                let record = try await importOne(url: urls[i], retries: retryCount)
-                queueItems[i].status = .success
-                queueItems[i].detail = "已完成：\(record.projectName)"
-                appendLog("抓取成功：\(record.fullName) - 版本 \(record.releaseTag)")
-                // 抓取进行中实时入库刷新
-                reloadRecords()
-            } catch {
-                queueItems[i].status = .failed
-                queueItems[i].detail = error.localizedDescription
-                failedURLs.append(urls[i])
-                failedProjects.append(
-                    FailedProject(
-                        name: projectNameFromURL(urls[i]),
-                        url: urls[i],
-                        reason: error.localizedDescription
-                    )
+                let outcome = await processQueueURL(
+                    urls[i],
+                    totalCount: urls.count,
+                    queuePosition: i + 1,
+                    inactivityTimeout: 10,
+                    allowDeferredRetry: true
                 )
-                appendLog("抓取失败：\(urls[i])，原因：\(error.localizedDescription)")
-            }
-            fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
 
-            if pauseRequested {
-                queueItems[i].status = .pending
-                queueItems[i].detail = "已暂停，将从该项继续"
-                crawlState = .paused
-                isLoading = false
-                statusMessage = "已暂停，可点击开始继续。"
-                appendLog("抓取队列已暂停，将从当前项继续。")
+                switch outcome {
+                case .success:
+                    break
+                case .deferred:
+                    if !deferredRetryURLs.contains(urls[i]) {
+                        deferredRetryURLs.append(urls[i])
+                    }
+                case .failed(let reason):
+                    markQueueFailed(url: urls[i], reason: reason)
+                }
+
+                fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
+                i += 1
                 currentQueueIndex = i
-                return
             }
-
-            i += 1
-            currentQueueIndex = i
+            inRetryPhase = true
+            retryQueueIndex = max(retryQueueIndex, 0)
         }
 
-        crawlState = .idle
-        isLoading = false
-        currentQueueIndex = 0
-        queuedURLs = []
-        downloadTrafficText = "空闲"
-        reloadRecords()
-        if failedURLs.isEmpty {
-            statusMessage = "全部完成：\(urls.count) 个链接处理成功。"
-            appendLog("抓取队列完成，全部成功。")
-        } else {
-            statusMessage = "完成：成功 \(urls.count - failedURLs.count)，失败 \(failedURLs.count)。"
-            errorMessage = "可点击“重试失败项”再次处理失败链接。"
-            appendLog("抓取队列完成：成功 \(urls.count - failedURLs.count)，失败 \(failedURLs.count)。")
+        if !deferredRetryURLs.isEmpty {
+            appendLog("进入延后重试阶段，共 \(deferredRetryURLs.count) 项（30 秒无数据将再次跳过）。")
+        }
+
+        var r = retryQueueIndex
+        while r < deferredRetryURLs.count {
+            if shouldStopOrPause(firstPhaseIndex: currentQueueIndex, retryPhaseIndex: r) {
+                return
+            }
+
+            let url = deferredRetryURLs[r]
+            let outcome = await processQueueURL(
+                url,
+                totalCount: deferredRetryURLs.count,
+                queuePosition: r + 1,
+                inactivityTimeout: 30,
+                allowDeferredRetry: false
+            )
+
+            switch outcome {
+            case .success:
+                break
+            case .deferred:
+                markQueueFailed(url: url, reason: "重试阶段仍超时无数据（30 秒）。")
+            case .failed(let reason):
+                markQueueFailed(url: url, reason: reason)
+            }
+
+            fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
+            r += 1
+            retryQueueIndex = r
+        }
+
+        finishQueueRun(total: urls.count)
+    }
+
+    private func processQueueURL(
+        _ url: String,
+        totalCount: Int,
+        queuePosition: Int,
+        inactivityTimeout: TimeInterval,
+        allowDeferredRetry: Bool
+    ) async -> QueueProcessOutcome {
+        guard let idx = queueItems.firstIndex(where: { $0.url == url }) else {
+            return .failed("队列状态异常：未找到任务索引。")
+        }
+
+        queueItems[idx].status = .running
+        queueItems[idx].detail = allowDeferredRetry ? "开始抓取（10 秒无数据会暂时跳过）" : "重试中（30 秒无数据将跳过）"
+        statusMessage = "(\(queuePosition)/\(totalCount)) 处理中：\(url)"
+        appendLog("开始抓取：\(url)")
+
+        do {
+            let record = try await importOne(url: url, retries: retryCount, inactivityTimeout: inactivityTimeout)
+            queueItems[idx].status = .success
+            queueItems[idx].detail = "已完成：\(record.projectName)"
+            appendLog("抓取成功：\(record.fullName) - 版本 \(record.releaseTag)")
+            reloadRecords()
+            return .success
+        } catch let error as CrawlControlError {
+            switch error {
+            case .noDataTimeout(let seconds):
+                if allowDeferredRetry {
+                    queueItems[idx].status = .pending
+                    queueItems[idx].detail = "\(seconds) 秒无数据，已暂时跳过，稍后重试"
+                    appendLog("暂时跳过：\(url)，原因：\(seconds) 秒无数据。")
+                    return .deferred
+                }
+                queueItems[idx].status = .failed
+                queueItems[idx].detail = "\(seconds) 秒无数据，重试后仍失败"
+                appendLog("重试后跳过：\(url)，原因：\(seconds) 秒无数据。")
+                return .failed("重试阶段 \(seconds) 秒无数据，已跳过。")
+            case .skippedByUser:
+                if allowDeferredRetry {
+                    queueItems[idx].status = .pending
+                    queueItems[idx].detail = "已手动跳过，稍后重试"
+                    appendLog("已手动跳过：\(url)，将在重试阶段再次尝试。")
+                    return .deferred
+                }
+                queueItems[idx].status = .failed
+                queueItems[idx].detail = "重试阶段手动跳过"
+                appendLog("重试阶段手动跳过：\(url)")
+                return .failed("重试阶段手动跳过。")
+            }
+        } catch is CancellationError {
+            if stopRequested || Task.isCancelled {
+                return .failed("任务已停止。")
+            }
+            if allowDeferredRetry {
+                queueItems[idx].status = .pending
+                queueItems[idx].detail = "已取消，稍后重试"
+                return .deferred
+            }
+            queueItems[idx].status = .failed
+            queueItems[idx].detail = "重试阶段已取消"
+            return .failed("重试阶段任务取消。")
+        } catch {
+            queueItems[idx].status = .failed
+            queueItems[idx].detail = error.localizedDescription
+            appendLog("抓取失败：\(url)，原因：\(error.localizedDescription)")
+            return .failed(error.localizedDescription)
         }
     }
 
-    private func importOne(url: String, retries: Int) async throws -> RepoRecord {
+    private func shouldStopOrPause(firstPhaseIndex: Int, retryPhaseIndex: Int) -> Bool {
+        if Task.isCancelled || stopRequested {
+            crawlState = .idle
+            isLoading = false
+            statusMessage = "已停止抓取。"
+            appendLog("抓取队列停止。")
+            return true
+        }
+
+        if pauseRequested {
+            crawlState = .paused
+            isLoading = false
+            statusMessage = "已暂停，可点击开始继续。"
+            appendLog("抓取队列已暂停。")
+            currentQueueIndex = firstPhaseIndex
+            retryQueueIndex = retryPhaseIndex
+            return true
+        }
+        return false
+    }
+
+    private func finishQueueRun(total: Int) {
+        crawlState = .idle
+        isLoading = false
+        currentQueueIndex = 0
+        retryQueueIndex = 0
+        inRetryPhase = false
+        queuedURLs = []
+        deferredRetryURLs = []
+        manualSkipRequested = false
+        currentImportTask = nil
+        currentImportURL = ""
+        downloadTrafficText = "空闲"
+        reloadRecords()
+        if failedURLs.isEmpty {
+            statusMessage = "全部完成：\(total) 个链接处理成功。"
+            appendLog("抓取队列完成，全部成功。")
+        } else {
+            statusMessage = "完成：成功 \(total - failedURLs.count)，失败 \(failedURLs.count)。"
+            errorMessage = "可点击“重试失败项”再次处理失败链接。"
+            appendLog("抓取队列完成：成功 \(total - failedURLs.count)，失败 \(failedURLs.count)。")
+        }
+    }
+
+    private func markQueueFailed(url: String, reason: String) {
+        if !failedURLs.contains(url) {
+            failedURLs.append(url)
+        }
+        if !failedProjects.contains(where: { $0.url == url }) {
+            failedProjects.append(
+                FailedProject(
+                    name: projectNameFromURL(url),
+                    url: url,
+                    reason: reason
+                )
+            )
+        }
+    }
+
+    private func importOne(url: String, retries: Int, inactivityTimeout: TimeInterval = 30) async throws -> RepoRecord {
         var lastError: Error?
         let maxAttempt = max(1, min(retries, 5))
 
         for attempt in 1...maxAttempt {
             do {
-                return try await importOneAttempt(url: url)
+                return try await importOneMonitoredAttempt(url: url, inactivityTimeout: inactivityTimeout)
+            } catch let control as CrawlControlError {
+                throw control
+            } catch is CancellationError {
+                if manualSkipRequested {
+                    throw CrawlControlError.skippedByUser
+                }
+                throw CancellationError()
             } catch {
                 lastError = error
                 if attempt < maxAttempt {
@@ -636,7 +812,69 @@ final class AppViewModel: ObservableObject {
         throw lastError ?? URLError(.cannotParseResponse)
     }
 
+    private func importOneMonitoredAttempt(url: String, inactivityTimeout: TimeInterval) async throws -> RepoRecord {
+        manualSkipRequested = false
+        lastDataActivityAt = Date()
+        currentImportURL = url
+
+        let importTask = Task<RepoRecord, Error> { [weak self] in
+            guard let self else { throw URLError(.unknown) }
+            return try await self.importOneAttempt(url: url)
+        }
+        currentImportTask = importTask
+
+        defer {
+            currentImportTask = nil
+            currentImportURL = ""
+            manualSkipRequested = false
+        }
+
+        do {
+            return try await withThrowingTaskGroup(of: RepoRecord.self) { group in
+                group.addTask {
+                    try await importTask.value
+                }
+                group.addTask { [weak self] in
+                    guard let self else { throw URLError(.unknown) }
+                    while !Task.isCancelled {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                        let snapshot = await MainActor.run {
+                            (Date().timeIntervalSince(self.lastDataActivityAt), self.manualSkipRequested)
+                        }
+                        if snapshot.1 {
+                            importTask.cancel()
+                            throw CrawlControlError.skippedByUser
+                        }
+                        if snapshot.0 >= inactivityTimeout {
+                            importTask.cancel()
+                            throw CrawlControlError.noDataTimeout(seconds: Int(inactivityTimeout))
+                        }
+                    }
+                    throw CancellationError()
+                }
+                guard let first = try await group.next() else {
+                    throw URLError(.cannotParseResponse)
+                }
+                group.cancelAll()
+                return first
+            }
+        } catch is CancellationError {
+            if stopRequested || Task.isCancelled {
+                throw CancellationError()
+            }
+            if manualSkipRequested {
+                throw CrawlControlError.skippedByUser
+            }
+            throw CrawlControlError.noDataTimeout(seconds: Int(inactivityTimeout))
+        }
+    }
+
+    private func markDataActivity() {
+        lastDataActivityAt = Date()
+    }
+
     private func importOneAttempt(url: String) async throws -> RepoRecord {
+        markDataActivity()
         let identity = try URLParser.parseGitHubRepo(from: url)
         let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -645,8 +883,11 @@ final class AppViewModel: ObservableObject {
         async let release = github.fetchLatestRelease(identity, token: token)
 
         let fetchedRepo = try await repo
+        markDataActivity()
         let fetchedReadme = await readme
+        markDataActivity()
         let fetchedRelease = try await release
+        markDataActivity()
         appendLog("已读取仓库数据：\(fetchedRepo.fullName)")
 
         let readmeOriginal = fetchedReadme.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -682,6 +923,7 @@ final class AppViewModel: ObservableObject {
         currentSavePathText = projectDir.path
 
         let sourceDir = try await downloader.cloneRepository(repoURL: fetchedRepo.htmlURL, to: projectDir)
+        markDataActivity()
         sourceCodePath = sourceDir.path
         appendLog("已拉取源码：\(sourceCodePath)")
 
@@ -697,9 +939,11 @@ final class AppViewModel: ObservableObject {
                 appendLog("下载链接：\(asset.browserDownloadURL.absoluteString)")
                 let downloaded = try await downloader.download(asset: asset, to: projectDir) { [weak self] progress in
                     Task { @MainActor in
+                        self?.markDataActivity()
                         self?.appendDownloadLog(assetName: asset.name, progress: progress)
                     }
                 }
+                markDataActivity()
                 downloadedPaths.append(downloaded.path)
                 urls.append(asset.browserDownloadURL.absoluteString)
                 appendLog("已下载：\(asset.name)")
@@ -714,6 +958,7 @@ final class AppViewModel: ObservableObject {
 
         if let imageURL = extractFirstImageURL(from: fetchedReadme, repo: identity) {
             previewImagePath = await downloader.downloadImage(from: imageURL, to: projectDir)
+            markDataActivity()
             if !previewImagePath.isEmpty {
                 appendLog("已保存预览图：\(previewImagePath)")
             }
@@ -1058,5 +1303,32 @@ final class AppViewModel: ObservableObject {
         return pb.string(forType: .string)
             ?? pb.string(forType: .URL)
             ?? pb.string(forType: .fileURL)
+    }
+}
+
+private enum AppVersionResolver {
+    static func currentVersionDisplay() -> String {
+        if let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            let cleaned = short.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty {
+                return cleaned.lowercased().hasPrefix("v") ? cleaned : "v\(cleaned)"
+            }
+        }
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            let cleaned = build.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty {
+                return cleaned.lowercased().hasPrefix("v") ? cleaned : "v\(cleaned)"
+            }
+        }
+
+        let versionFile = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("VERSION")
+        if let raw = try? String(contentsOf: versionFile, encoding: .utf8) {
+            let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty {
+                return cleaned.lowercased().hasPrefix("v") ? cleaned : "v\(cleaned)"
+            }
+        }
+
+        return "开发版"
     }
 }

@@ -18,6 +18,19 @@ if [ -z "$TAG_NAME" ]; then
   TAG_NAME="$(basename "$OUT_DIR")"
 fi
 
+APP_VERSION="${TAG_NAME#v}"
+if [ -z "$APP_VERSION" ] || [ "$APP_VERSION" = "$TAG_NAME" ]; then
+  if [ -f "$ROOT_DIR/VERSION" ]; then
+    APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
+  else
+    APP_VERSION="1.0.0"
+  fi
+fi
+BUILD_NUMBER="$(echo "$APP_VERSION" | awk -F. '{print $NF}')"
+if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+  BUILD_NUMBER="1"
+fi
+
 BUILD_CACHE_DIR="$ROOT_DIR/.build-cache"
 CLANG_CACHE_DIR="$ROOT_DIR/.clang-cache"
 APP_NAME="GitHubCollector"
@@ -43,7 +56,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$DMG_STAGE_DIR
 cp ".build/release/$APP_NAME" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-cat >"$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat >"$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -57,9 +70,9 @@ cat >"$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key>
   <string>com.sexyfeifan.GitHubCollector</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${BUILD_NUMBER}</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>${APP_VERSION}</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
 </dict>

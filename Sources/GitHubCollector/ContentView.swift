@@ -13,32 +13,32 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                inputPanel
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    inputPanel
 
-                if vm.isLoading {
-                    ProgressView().controlSize(.small)
-                }
+                    if vm.isLoading {
+                        ProgressView().controlSize(.small)
+                    }
 
-                if !vm.statusMessage.isEmpty {
-                    Text(vm.statusMessage)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                    if !vm.statusMessage.isEmpty {
+                        Text(vm.statusMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
 
-                if !vm.errorMessage.isEmpty {
-                    Text(vm.errorMessage)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                }
+                    if !vm.errorMessage.isEmpty {
+                        Text(vm.errorMessage)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
 
-                if !vm.queueItems.isEmpty {
-                    queuePanel
-                }
+                    if !vm.queueItems.isEmpty {
+                        queuePanel
+                    }
 
-                categoryPanel
+                    categoryPanel
 
-                ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(vm.pagedRecords) { record in
                             RepoCard(
@@ -56,23 +56,23 @@ struct ContentView: View {
                     }
                     .padding(.top, 4)
                     .padding(.bottom, 10)
-                }
 
-                HStack {
-                    Text("第 \(vm.currentPage) / \(vm.totalPages) 页")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("上一页") { vm.prevPage() }
-                        .buttonStyle(.bordered)
-                        .disabled(vm.currentPage <= 1)
-                    Button("下一页") { vm.nextPage() }
-                        .buttonStyle(.bordered)
-                        .disabled(vm.currentPage >= vm.totalPages)
+                    HStack {
+                        Text("第 \(vm.currentPage) / \(vm.totalPages) 页")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("上一页") { vm.prevPage() }
+                            .buttonStyle(.bordered)
+                            .disabled(vm.currentPage <= 1)
+                        Button("下一页") { vm.nextPage() }
+                            .buttonStyle(.bordered)
+                            .disabled(vm.currentPage >= vm.totalPages)
+                    }
                 }
+                .padding(16)
             }
-            .padding(16)
-            .frame(minWidth: 1180, minHeight: 780)
+            .frame(minWidth: 980, minHeight: 560)
 
             if showSettingsDrawer {
                 Divider()
@@ -108,8 +108,13 @@ struct ContentView: View {
     private var inputPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("导入 GitHub 链接（单个或批量，每行一个）")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("导入 GitHub 链接（单个或批量，每行一个）")
+                        .font(.headline)
+                    Text("软件版本：\(vm.appVersion)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("清空") {
                     vm.clearInputURLs()
@@ -146,6 +151,10 @@ struct ContentView: View {
                 Button("停止") { vm.stopCrawl() }
                     .buttonStyle(.bordered)
                     .disabled(!vm.canStopCrawl)
+
+                Button("跳过当前") { vm.skipCurrentProject() }
+                    .buttonStyle(.bordered)
+                    .disabled(!vm.canSkipCurrent)
 
                 Button("重试失败项") { vm.retryFailedImports() }
                     .buttonStyle(.bordered)
@@ -240,16 +249,17 @@ struct ContentView: View {
     }
 
     private var settingsDrawer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("设置")
-                    .font(.title3).bold()
-                Spacer()
-                Button("收起") {
-                    showSettingsDrawer = false
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("设置")
+                        .font(.title3).bold()
+                    Spacer()
+                    Button("收起") {
+                        showSettingsDrawer = false
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
-            }
 
             Text("OpenAI")
                 .font(.headline)
@@ -383,17 +393,16 @@ struct ContentView: View {
                     .lineLimit(2)
             }
 
-            HStack {
-                Button("一键还原") { vm.restoreSettings() }
-                    .buttonStyle(.bordered)
-                Spacer()
-                Button("一键保存并扫描") { vm.saveSettings() }
-                    .buttonStyle(.borderedProminent)
+                HStack {
+                    Button("一键还原") { vm.restoreSettings() }
+                        .buttonStyle(.bordered)
+                    Spacer()
+                    Button("一键保存并扫描") { vm.saveSettings() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
-
-            Spacer()
+            .padding(12)
         }
-        .padding(12)
     }
 
     private var queuePanel: some View {
@@ -581,6 +590,8 @@ private struct RepoCard: View {
                 .fill(Color(NSColor.windowBackgroundColor))
                 .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
         )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: openDetail)
     }
 }
 
@@ -651,7 +662,7 @@ private struct RepoDetailView: View {
                     )
                     section(
                         "搭建教程",
-                        record.setupGuideZH.isEmpty ? "暂无可提取的搭建教程" : record.setupGuideZH,
+                        record.setupGuideZH.isEmpty ? "暂无可提取的搭建安装相关内容" : record.setupGuideZH,
                         renderMarkdown: renderMarkdown
                     )
                     section(

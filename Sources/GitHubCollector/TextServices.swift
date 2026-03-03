@@ -88,37 +88,9 @@ struct TranslatorService {
 
     func extractSetupGuide(_ readme: String, config: TranslationConfig) async -> String {
         let trimmed = readme.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "暂无可提取的搭建步骤。" }
-
-        guard config.isEnabled else {
-            return fallbackSetupGuide(from: trimmed)
-        }
-
-        let clipped = String(trimmed.prefix(12_000))
-        let prompt = """
-        请从 README 中提取“运行方式/搭建代码/部署命令/启动步骤”，不限 docker。
-        输出要求：
-        - 用中文编号步骤（步骤 1、步骤 2...）；
-        - 每一步必须包含“这一步的目的”与“关键命令/配置”；
-        - 只要属于安装、构建、运行、部署、测试、初始化相关内容都要纳入；
-        - 如果存在多种运行方式（本地、Docker、二进制等），分别分组；
-        - 没有明确步骤时，输出“未找到明确搭建步骤”并给出最接近的运行命令。
-
-        README:
-        \(clipped)
-        """
-
-        do {
-            let result = try await chat(
-                system: "你是 DevOps 与工程化文档专家。",
-                user: prompt,
-                config: config,
-                temperature: 0.2
-            )
-            return result.isEmpty ? fallbackSetupGuide(from: trimmed) : result
-        } catch {
-            return fallbackSetupGuide(from: trimmed)
-        }
+        guard !trimmed.isEmpty else { return "暂无可提取的搭建安装内容。" }
+        _ = config
+        return extractSetupGuideLines(from: trimmed)
     }
 
     private func translateWithOpenAI(_ text: String, config: TranslationConfig) async throws -> String {
@@ -187,56 +159,89 @@ struct TranslatorService {
         return "\(title)\n\n\(body)"
     }
 
-    private func fallbackSetupGuide(from text: String) -> String {
-        let lines = text
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        let keywords = [
-            "install", "setup", "quick start", "usage", "run", "start", "build", "deploy", "test",
-            "启动", "运行", "安装", "部署", "构建", "编译", "测试", "初始化",
-            "docker", "npm", "pnpm", "yarn", "pip", "poetry", "cargo", "go run", "make", "cmake", "swift run"
+    private func extractSetupGuideLines(from text: String) -> String {
+        let setupKeywords = [
+            "install", "installation", "setup", "quick start", "getting started", "usage", "run", "start",
+            "build", "deploy", "test", "initialize", "init", "requirements", "prerequisite",
+            "启动", "运行", "安装", "部署", "构建", "编译", "测试", "初始化", "依赖", "环境", "使用说明"
         ]
-        let commandHints = ["$", "npm ", "pnpm ", "yarn ", "pip ", "python ", "cargo ", "go ", "make ", "docker ", "swift "]
-        let matches = lines.filter { line in
-            let lower = line.lowercased()
-            let hasKeyword = keywords.contains(where: { lower.contains($0) })
-            let looksLikeCommand = commandHints.contains(where: { lower.hasPrefix($0) || lower.contains(" \($0)") })
-            return hasKeyword || looksLikeCommand || line.hasPrefix("```")
-        }.prefix(12)
+        let commandPrefixes = [
+            "$", "npm ", "pnpm ", "yarn ", "pip ", "python ", "poetry ", "cargo ", "go ", "make ",
+            "cmake ", "docker ", "docker-compose ", "swift ", "brew ", "node ", "java ", "./"
+        ]
 
-        if matches.isEmpty {
-            return "未找到明确搭建步骤。"
+        let lines = text.components(separatedBy: .newlines)
+        var collected: [String] = []
+        var seen = Set<String>()
+        var inFence = false
+        var currentHeading = ""
+        var headingMatched = false
+        var lastInjectedHeading = ""
+
+        for raw in lines {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            if trimmed.hasPrefix("```") {
+                inFence.toggle()
+                continue
+            }
+
+            if trimmed.hasPrefix("#") {
+                currentHeading = normalizeSetupLine(trimmed.replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression))
+                headingMatched = containsSetupKeyword(currentHeading, keywords: setupKeywords)
+                continue
+            }
+
+            let normalized = normalizeSetupLine(trimmed)
+            if normalized.isEmpty { continue }
+
+            let looksLikeCommand = isCommandLine(normalized, prefixes: commandPrefixes)
+            let matchedByText = containsSetupKeyword(normalized, keywords: setupKeywords)
+            let shouldInclude = headingMatched || matchedByText || looksLikeCommand || (inFence && looksLikeCommand)
+            if !shouldInclude { continue }
+
+            if headingMatched, !currentHeading.isEmpty, currentHeading != lastInjectedHeading {
+                appendUnique(currentHeading, to: &collected, seen: &seen)
+                lastInjectedHeading = currentHeading
+            }
+
+            appendUnique(normalized, to: &collected, seen: &seen)
+            if collected.count >= 24 { break }
         }
 
-        var steps: [String] = []
-        var index = 1
-        for line in matches {
-            steps.append("步骤 \(index)：\(purposeHint(for: line))\n- 关键内容：\(line)")
-            index += 1
+        if collected.isEmpty {
+            return "未找到明确的搭建安装相关内容。"
         }
-        return steps.joined(separator: "\n")
+        return collected.joined(separator: "\n")
     }
 
-    private func purposeHint(for line: String) -> String {
+    private func normalizeSetupLine(_ line: String) -> String {
+        var cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        cleaned = cleaned.replacingOccurrences(of: "^[-*+]\\s+", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "^\\d+[\\.)]\\s+", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "^>\\s*", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "`", with: "")
+        if cleaned.hasPrefix("![") { return "" }
+        if cleaned.lowercased().contains("badge") || cleaned.lowercased().contains("shield") { return "" }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func containsSetupKeyword(_ line: String, keywords: [String]) -> Bool {
         let lower = line.lowercased()
-        if lower.contains("install") || lower.contains("安装") {
-            return "安装依赖或准备运行环境"
+        return keywords.contains(where: { lower.contains($0) })
+    }
+
+    private func isCommandLine(_ line: String, prefixes: [String]) -> Bool {
+        let lower = line.lowercased()
+        return prefixes.contains(where: { lower.hasPrefix($0) })
+    }
+
+    private func appendUnique(_ line: String, to list: inout [String], seen: inout Set<String>) {
+        guard !line.isEmpty else { return }
+        if seen.insert(line).inserted {
+            list.append(line)
         }
-        if lower.contains("build") || lower.contains("构建") || lower.contains("编译") {
-            return "构建项目产物"
-        }
-        if lower.contains("test") || lower.contains("测试") {
-            return "验证项目可用性"
-        }
-        if lower.contains("run") || lower.contains("start") || lower.contains("启动") || lower.contains("运行") {
-            return "启动项目服务或应用"
-        }
-        if lower.contains("docker") {
-            return "通过容器方式启动项目"
-        }
-        return "执行 README 中给出的关键步骤"
     }
 }
 

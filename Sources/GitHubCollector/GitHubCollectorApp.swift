@@ -6,6 +6,5 @@ struct GitHubCollectorApp: App {
         WindowGroup {
             ContentView()
         }
-        .windowResizability(.contentSize)
     }
 }
