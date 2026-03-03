@@ -920,9 +920,11 @@ final class AppViewModel: ObservableObject {
         let classifyText = mergedDescription(repo: fetchedRepo, readme: readmeTextForDisplay)
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        let chineseDescription = await buildChineseDescription(from: readmeTextForDisplay, config: config)
+        let chineseDescriptionRaw = await buildChineseDescription(from: readmeTextForDisplay, config: config)
+        let chineseDescription = beautifyChineseIntroText(chineseDescriptionRaw)
         let chineseReleaseNotes = await translator.translateToChinese(releaseNotesEN, config: config)
-        let setupGuide = await translator.extractSetupGuide(readmeTextForDisplay, config: config)
+        let setupGuideRaw = await translator.extractSetupGuide(readmeTextForDisplay, config: config)
+        let setupGuide = beautifySetupGuideText(setupGuideRaw)
 
         let summary = summarizer.summarize(
             chineseDescription.isEmpty ? readmeTextForDisplay : chineseDescription,
@@ -1100,8 +1102,10 @@ final class AppViewModel: ObservableObject {
         let cleaned = cleanReadmeContent(record.descriptionEN)
         let textSource = cleaned.isEmpty ? record.descriptionEN : cleaned
         updated.descriptionEN = textSource
-        updated.descriptionZH = await buildChineseDescription(from: textSource, config: config)
-        updated.setupGuideZH = await translator.extractSetupGuide(textSource, config: config)
+        let optimizedDescription = await buildChineseDescription(from: textSource, config: config)
+        updated.descriptionZH = beautifyChineseIntroText(optimizedDescription)
+        let optimizedGuide = await translator.extractSetupGuide(textSource, config: config)
+        updated.setupGuideZH = beautifySetupGuideText(optimizedGuide)
         updated.releaseNotesZH = await translator.translateToChinese(record.releaseNotesEN, config: config)
         updated.summaryZH = summarizer.summarize(updated.descriptionZH, fallbackTitle: record.projectName)
         updated.updatedAt = Date()
@@ -1185,6 +1189,143 @@ final class AppViewModel: ObservableObject {
             if scalar.value >= 0x4E00 && scalar.value <= 0x9FFF {
                 return true
             }
+        }
+        return false
+    }
+
+    private func beautifyChineseIntroText(_ text: String) -> String {
+        let rawLines = text.components(separatedBy: .newlines)
+        var lines: [String] = []
+        var inFence = false
+
+        for line in rawLines {
+            var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("```") {
+                inFence.toggle()
+                continue
+            }
+            if trimmed.isEmpty { continue }
+            if inFence {
+                trimmed = trimmed.replacingOccurrences(of: "`", with: "")
+            }
+            trimmed = trimmed.replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
+            trimmed = trimmed.replacingOccurrences(of: "^[-*+]\\s+", with: "• ", options: .regularExpression)
+            trimmed = trimmed.replacingOccurrences(of: "^\\d+[\\.)]\\s*", with: "• ", options: .regularExpression)
+            trimmed = trimmed.replacingOccurrences(of: "`", with: "")
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            lines.append(trimmed)
+        }
+
+        if lines.isEmpty {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func beautifySetupGuideText(_ text: String) -> String {
+        let rawLines = text.components(separatedBy: .newlines)
+        var output: [String] = []
+        var composeLines: [String] = []
+        var inFence = false
+        var composeMode = false
+
+        func flushCompose() {
+            guard !composeLines.isEmpty else { return }
+            output.append("```yaml")
+            output.append(contentsOf: composeLines)
+            output.append("```")
+            composeLines.removeAll()
+        }
+
+        for raw in rawLines {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.hasPrefix("```") {
+                inFence.toggle()
+                continue
+            }
+            if trimmed.isEmpty { continue }
+
+            let lower = trimmed.lowercased()
+            if lower.contains("docker-compose") || lower.contains("compose.yml") || lower.contains("compose.yaml") {
+                composeMode = true
+                continue
+            }
+
+            if composeMode {
+                if looksLikeSetupCommand(trimmed) {
+                    flushCompose()
+                    composeMode = false
+                } else if looksLikeYAMLLine(raw: raw, trimmed: trimmed) {
+                    composeLines.append(raw.trimmingCharacters(in: .newlines))
+                    continue
+                } else {
+                    flushCompose()
+                    composeMode = false
+                }
+            }
+
+            let lineForCommand = trimmed.replacingOccurrences(of: "`", with: "")
+            if inFence || looksLikeSetupCommand(lineForCommand) {
+                let commands = splitCommandSegments(lineForCommand)
+                for command in commands where !command.isEmpty {
+                    output.append("- `\(command)`")
+                }
+                continue
+            }
+
+            var textLine = lineForCommand
+            textLine = textLine.replacingOccurrences(of: "^#+\\s*", with: "", options: .regularExpression)
+            textLine = textLine.replacingOccurrences(of: "^[-*+]\\s+", with: "", options: .regularExpression)
+            textLine = textLine.replacingOccurrences(of: "^\\d+[\\.)]\\s*", with: "", options: .regularExpression)
+            textLine = textLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !textLine.isEmpty {
+                output.append(textLine)
+            }
+        }
+
+        flushCompose()
+        if output.isEmpty {
+            return "暂无可提取的搭建安装相关内容"
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private func looksLikeSetupCommand(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        let prefixes = [
+            "$", "npm ", "pnpm ", "yarn ", "pip ", "python ", "poetry ", "cargo ",
+            "go ", "make ", "cmake ", "docker ", "docker-compose ", "swift ", "brew ",
+            "node ", "java ", "./", "git ", "chmod ", "cp ", "mv ", "rm ", "export "
+        ]
+        if prefixes.contains(where: { lower.hasPrefix($0) }) { return true }
+        if lower.contains(" run ") || lower.contains(" install ") || lower.contains(" build ") || lower.contains(" test ") {
+            return true
+        }
+        return false
+    }
+
+    private func splitCommandSegments(_ line: String) -> [String] {
+        let normalized = line.replacingOccurrences(of: "&&", with: "\n")
+            .replacingOccurrences(of: ";", with: "\n")
+        return normalized
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func looksLikeYAMLLine(raw: String, trimmed: String) -> Bool {
+        if raw.hasPrefix(" ") || raw.hasPrefix("\t") { return true }
+        let lower = trimmed.lowercased()
+        if lower == "services:" || lower == "version:" || lower == "networks:" || lower == "volumes:" || lower == "configs:" || lower == "secrets:" {
+            return true
+        }
+        if trimmed.range(of: "^[a-zA-Z0-9_-]+:\\s*$", options: .regularExpression) != nil {
+            return true
+        }
+        if trimmed.contains(": ") && !looksLikeSetupCommand(trimmed) {
+            return true
         }
         return false
     }
