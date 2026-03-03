@@ -21,12 +21,14 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_OUTPUT="$("$ROOT_DIR/scripts/build_dmg.sh")"
+BUILD_OUTPUT="$("$ROOT_DIR/scripts/build_dmg.sh" "" "$TAG")"
 OUT_DIR="$(echo "$BUILD_OUTPUT" | awk -F= '/^OUT_DIR=/{print $2}')"
 DMG_PATH="$(echo "$BUILD_OUTPUT" | awk -F= '/^DMG_PATH=/{print $2}')"
+APP_ZIP_PATH="$(echo "$BUILD_OUTPUT" | awk -F= '/^APP_ZIP_PATH=/{print $2}')"
 SOURCE_TAR_PATH="$(echo "$BUILD_OUTPUT" | awk -F= '/^SOURCE_TAR_PATH=/{print $2}')"
+ARCHIVE_LATEST_DIR="$(echo "$BUILD_OUTPUT" | awk -F= '/^ARCHIVE_LATEST_DIR=/{print $2}')"
 
-if [ -z "$OUT_DIR" ] || [ -z "$DMG_PATH" ] || [ -z "$SOURCE_TAR_PATH" ]; then
+if [ -z "$OUT_DIR" ] || [ -z "$DMG_PATH" ] || [ -z "$APP_ZIP_PATH" ] || [ -z "$SOURCE_TAR_PATH" ] || [ -z "$ARCHIVE_LATEST_DIR" ]; then
   echo "Failed to parse build output"
   exit 1
 fi
@@ -38,15 +40,19 @@ AUTH_HEADERS=(
   -H "X-GitHub-Api-Version: 2022-11-28"
 )
 
-NOTES="## 更新亮点
-- 发布流程升级：自动构建 macOS 可安装的 GitHubCollector.dmg 并上传到 Release。
-- 新增设置页检测能力：支持 AI 连通性测试与 GitHub Token 有效性测试。
-- 抓取稳健性修复：Token 异常时自动回退无 Token 请求，降低抓取失败概率。
-- 抓取准确性提升：latest release 无资产时自动回退到有资产版本。
-- 抓取流程升级：先完整拉取源码，再下载该 release 全部安装包。
-- README 语义修复：原文完整保留，中文区显示翻译与精简归纳。
-- 搭建教程提取增强：安装/构建/运行/部署/测试步骤统一提取并标注说明。
-- 设置增强：支持 GitHub Token，设置写入下载目录并可自动回填。"
+NOTES="## ✨ 更新亮点
+- 🚀 发布流程升级：自动构建并上传 `GitHubCollector.dmg` / `GitHubCollector.app.zip` / 源码包。
+- 🧪 设置页新增检测：支持 AI 连通性测试与 GitHub Token 有效性测试。
+- 🛡️ 抓取稳健性修复：Token 异常自动回退无 Token 请求，降低抓取失败概率。
+- 🎯 抓取准确性提升：latest release 无资产时自动回退到有资产版本。
+- 🧰 抓取流程升级：先完整拉取源码，再下载该 release 全部安装包。
+- 📚 README 语义修复：原文完整保留，中文区显示翻译与精简归纳。
+- 🧭 搭建教程提取增强：安装/构建/运行/部署/测试步骤统一提取并标注说明。
+
+## 📦 资产说明
+- `GitHubCollector.dmg`：macOS 安装包（推荐）
+- `GitHubCollector.app.zip`：应用包压缩版
+- `GitHubCollector-source.tar.gz`：对应版本源码"
 
 release_http_code="$(curl -sS -o /tmp/gh_release_existing.json -w '%{http_code}' \
   "${AUTH_HEADERS[@]}" \
@@ -108,10 +114,12 @@ upload_asset() {
   fi
 }
 
-upload_asset "$DMG_PATH" "GitHubCollector.dmg"
-upload_asset "$SOURCE_TAR_PATH" "GitHubCollector-source.tar.gz"
+upload_asset "$ARCHIVE_LATEST_DIR/GitHubCollector.dmg" "GitHubCollector.dmg"
+upload_asset "$ARCHIVE_LATEST_DIR/GitHubCollector.app.zip" "GitHubCollector.app.zip"
+upload_asset "$ARCHIVE_LATEST_DIR/GitHubCollector-source.tar.gz" "GitHubCollector-source.tar.gz"
 
 curl -sS "${AUTH_HEADERS[@]}" "${API}/releases/${RELEASE_ID}" | jq -r \
   '.html_url, .name, .tag_name, (.assets[]?.name)'
 
 echo "BUILD_OUTPUT_DIR=${OUT_DIR}"
+echo "ARCHIVE_LATEST_DIR=${ARCHIVE_LATEST_DIR}"

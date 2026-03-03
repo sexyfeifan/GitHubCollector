@@ -23,6 +23,7 @@
 - 设置会同步写入下载目录下的 `collector_settings.json`，切换目录时自动回填
 - 新增 GitHub Token 配置（可选），用于提升 API 限流场景下的抓取稳定性
 - 设置页新增 AI 连通性测试与 GitHub Token 有效性测试
+- 设置页支持一键保存与一键还原
 - 删除项目后即时从首页消失（防止目录扫描回流）
 - 抓取内容自动清洗，剔除徽章/链接/图片 markdown 等无关文本
 - 若抓到图片会下载到本地并在卡片与详情窗口显示
@@ -80,8 +81,12 @@ export GITHUB_TOKEN=你的GitHubToken
 发布脚本会：
 - 自动构建 release 二进制并封装为 `GitHubCollector.dmg`
 - 自动创建/更新对应 tag 的 GitHub Release，名称为 `GitHubCollector <tag>`
-- 清理该 Release 旧资产并重新上传：
+- 维护本地归档目录 `GitHubCollectorArchive/`：
+  - `<tag>/` 存放该版本的 `dmg`、`app`、`app.zip`、源码包
+  - `latest/` 始终存放最新版本资产
+- 清理该 Release 旧资产并从 `GitHubCollectorArchive/latest/` 重新上传：
   - `GitHubCollector.dmg`
+  - `GitHubCollector.app.zip`
   - `GitHubCollector-source.tar.gz`
 
 ## 本地数据

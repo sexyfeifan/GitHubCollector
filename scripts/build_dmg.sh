@@ -3,10 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="${1:-}"
+TAG_NAME="${2:-}"
 
 if [ -z "$OUT_DIR" ]; then
   TS="$(date +%Y%m%d-%H%M%S)"
   OUT_DIR="$ROOT_DIR/dist/$TS"
+fi
+
+if [ -z "$TAG_NAME" ] && [ -f "$ROOT_DIR/VERSION" ]; then
+  TAG_NAME="v$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
+fi
+
+if [ -z "$TAG_NAME" ]; then
+  TAG_NAME="$(basename "$OUT_DIR")"
 fi
 
 BUILD_CACHE_DIR="$ROOT_DIR/.build-cache"
@@ -15,7 +24,11 @@ APP_NAME="GitHubCollector"
 APP_DIR="$OUT_DIR/${APP_NAME}.app"
 DMG_STAGE_DIR="$OUT_DIR/dmg-root"
 DMG_PATH="$OUT_DIR/${APP_NAME}.dmg"
+APP_ZIP_PATH="$OUT_DIR/${APP_NAME}.app.zip"
 SOURCE_TAR_PATH="$OUT_DIR/${APP_NAME}-source.tar.gz"
+ARCHIVE_ROOT="$ROOT_DIR/GitHubCollectorArchive"
+ARCHIVE_VERSION_DIR="$ARCHIVE_ROOT/$TAG_NAME"
+ARCHIVE_LATEST_DIR="$ARCHIVE_ROOT/latest"
 
 mkdir -p "$OUT_DIR" "$BUILD_CACHE_DIR" "$CLANG_CACHE_DIR"
 
@@ -62,6 +75,8 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH" >/dev/null
 
+ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ZIP_PATH"
+
 tar \
   --exclude=.git \
   --exclude=.build \
@@ -72,6 +87,22 @@ tar \
   -czf "$SOURCE_TAR_PATH" \
   -C "$ROOT_DIR" .
 
+rm -rf "$ARCHIVE_VERSION_DIR" "$ARCHIVE_LATEST_DIR"
+mkdir -p "$ARCHIVE_VERSION_DIR" "$ARCHIVE_LATEST_DIR"
+
+cp "$DMG_PATH" "$ARCHIVE_VERSION_DIR/${APP_NAME}.dmg"
+cp "$APP_ZIP_PATH" "$ARCHIVE_VERSION_DIR/${APP_NAME}.app.zip"
+cp "$SOURCE_TAR_PATH" "$ARCHIVE_VERSION_DIR/${APP_NAME}-source.tar.gz"
+cp -R "$APP_DIR" "$ARCHIVE_VERSION_DIR/${APP_NAME}.app"
+
+cp "$DMG_PATH" "$ARCHIVE_LATEST_DIR/${APP_NAME}.dmg"
+cp "$APP_ZIP_PATH" "$ARCHIVE_LATEST_DIR/${APP_NAME}.app.zip"
+cp "$SOURCE_TAR_PATH" "$ARCHIVE_LATEST_DIR/${APP_NAME}-source.tar.gz"
+cp -R "$APP_DIR" "$ARCHIVE_LATEST_DIR/${APP_NAME}.app"
+
 echo "OUT_DIR=$OUT_DIR"
 echo "DMG_PATH=$DMG_PATH"
+echo "APP_ZIP_PATH=$APP_ZIP_PATH"
 echo "SOURCE_TAR_PATH=$SOURCE_TAR_PATH"
+echo "ARCHIVE_VERSION_DIR=$ARCHIVE_VERSION_DIR"
+echo "ARCHIVE_LATEST_DIR=$ARCHIVE_LATEST_DIR"

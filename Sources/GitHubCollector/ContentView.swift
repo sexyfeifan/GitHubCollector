@@ -309,6 +309,9 @@ struct ContentView: View {
                 .disabled(vm.isTestingAIConnectivity)
                 Spacer()
             }
+            Text("AI 测试结果：\(vm.aiConnectivityTestResult)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             Divider()
 
@@ -342,6 +345,9 @@ struct ContentView: View {
                 .disabled(vm.isTestingGitHubToken)
                 Spacer()
             }
+            Text("Token 测试结果：\(vm.githubTokenTestResult)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             Divider()
 
@@ -378,8 +384,10 @@ struct ContentView: View {
             }
 
             HStack {
+                Button("一键还原") { vm.restoreSettings() }
+                    .buttonStyle(.bordered)
                 Spacer()
-                Button("保存并扫描") { vm.saveSettings() }
+                Button("一键保存并扫描") { vm.saveSettings() }
                     .buttonStyle(.borderedProminent)
             }
 

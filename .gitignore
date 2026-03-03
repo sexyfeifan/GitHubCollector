@@ -4,6 +4,7 @@
 .clang-cache/
 
 dist/
+GitHubCollectorArchive/
 
 .swiftpm/
 Package.resolved

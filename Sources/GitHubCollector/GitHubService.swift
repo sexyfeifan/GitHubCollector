@@ -201,7 +201,7 @@ struct GitHubService {
         }
 
         let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        if allowFallbackToAnonymous, !cleaned.isEmpty, http.statusCode == 401 || http.statusCode == 403 {
+        if allowFallbackToAnonymous && !cleaned.isEmpty && (http.statusCode == 401 || http.statusCode == 403) {
             let fallbackRequest = makeRequest(url: url, token: "", accept: accept)
             let (fallbackData, fallbackResponse) = try await URLSession.shared.data(for: fallbackRequest)
             guard let fallbackHttp = fallbackResponse as? HTTPURLResponse else {
@@ -230,6 +230,7 @@ struct GitHubService {
 
     private func makeRequest(url: URL, token: String, accept: String) -> URLRequest {
         var request = URLRequest(url: url)
+        request.timeoutInterval = 25
         request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("GitHubCollector", forHTTPHeaderField: "User-Agent")
         let cleanedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)

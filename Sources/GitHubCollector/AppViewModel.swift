@@ -47,6 +47,8 @@ final class AppViewModel: ObservableObject {
     @Published var downloadRootPath: String = ""
     @Published var isTestingAIConnectivity = false
     @Published var isTestingGitHubToken = false
+    @Published var aiConnectivityTestResult: String = "未测试"
+    @Published var githubTokenTestResult: String = "未测试"
 
     @Published var queueItems: [QueueItem] = []
     @Published var failedURLs: [String] = []
@@ -63,6 +65,7 @@ final class AppViewModel: ObservableObject {
     private var pauseRequested = false
     private var stopRequested = false
     private var queueTask: Task<Void, Never>?
+    private var lastSavedSettingsSnapshot = AppSettings()
 
     private let github = GitHubService()
     private let translator = TranslatorService()
@@ -76,6 +79,7 @@ final class AppViewModel: ObservableObject {
         let s = settings.load()
         applySettings(s)
         loadSettingsFromStorageIfPresent(baseDir: activeBaseDir)
+        lastSavedSettingsSnapshot = buildCurrentSettings(downloadPath: activeBaseDir.path)
         reloadRecords()
         refreshStorageMetrics()
     }
@@ -161,7 +165,24 @@ final class AppViewModel: ObservableObject {
         }
         reloadRecords()
         refreshStorageMetrics()
+        lastSavedSettingsSnapshot = payload
         statusMessage = "设置已保存。"
+    }
+
+    func restoreSettings() {
+        let baseDir = storage.resolvedBaseDir(customPath: downloadRootPath)
+        if let fromFile = settings.loadFromFile(baseDir: baseDir) {
+            applySettings(fromFile)
+            downloadRootPath = baseDir.path
+            lastSavedSettingsSnapshot = buildCurrentSettings(downloadPath: baseDir.path)
+            refreshStorageMetrics()
+            statusMessage = "已从目录设置文件还原。"
+            return
+        }
+
+        applySettings(lastSavedSettingsSnapshot)
+        refreshStorageMetrics()
+        statusMessage = "已还原到最近保存设置。"
     }
 
     func pasteFromClipboard() {
@@ -206,14 +227,23 @@ final class AppViewModel: ObservableObject {
         isTestingAIConnectivity = true
         statusMessage = "正在测试 AI 连通性..."
         errorMessage = ""
+        aiConnectivityTestResult = "测试中..."
 
-        Task {
-            defer { isTestingAIConnectivity = false }
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 let result = try await translator.probeConnectivity(config: config)
-                statusMessage = "AI 连通成功：\(result)"
+                await MainActor.run {
+                    self.isTestingAIConnectivity = false
+                    self.aiConnectivityTestResult = "成功：\(result)"
+                    self.statusMessage = "AI 连通成功：\(result)"
+                }
             } catch {
-                errorMessage = "AI 连通失败：\(error.localizedDescription)"
+                await MainActor.run {
+                    self.isTestingAIConnectivity = false
+                    self.aiConnectivityTestResult = "失败：\(error.localizedDescription)"
+                    self.errorMessage = "AI 连通失败：\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -228,14 +258,23 @@ final class AppViewModel: ObservableObject {
         isTestingGitHubToken = true
         statusMessage = "正在验证 GitHub Token..."
         errorMessage = ""
+        githubTokenTestResult = "验证中..."
 
-        Task {
-            defer { isTestingGitHubToken = false }
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 let login = try await github.validateToken(token)
-                statusMessage = "GitHub Token 有效：\(login)"
+                await MainActor.run {
+                    self.isTestingGitHubToken = false
+                    self.githubTokenTestResult = "有效：\(login)"
+                    self.statusMessage = "GitHub Token 有效：\(login)"
+                }
             } catch {
-                errorMessage = "GitHub Token 无效：\(error.localizedDescription)"
+                await MainActor.run {
+                    self.isTestingGitHubToken = false
+                    self.githubTokenTestResult = "无效：\(error.localizedDescription)"
+                    self.errorMessage = "GitHub Token 无效：\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -999,6 +1038,7 @@ final class AppViewModel: ObservableObject {
         applySettings(fromFile)
         downloadRootPath = currentPath
         settings.save(buildCurrentSettings(downloadPath: currentPath))
+        lastSavedSettingsSnapshot = buildCurrentSettings(downloadPath: currentPath)
         return true
     }
 
