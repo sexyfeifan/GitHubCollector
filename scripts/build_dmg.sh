@@ -34,6 +34,8 @@ fi
 BUILD_CACHE_DIR="$ROOT_DIR/.build-cache"
 CLANG_CACHE_DIR="$ROOT_DIR/.clang-cache"
 APP_NAME="GitHubCollector"
+ICON_FILE_NAME="GitHubCollector.icns"
+ICON_SOURCE_PATH="$ROOT_DIR/Resources/$ICON_FILE_NAME"
 APP_DIR="$OUT_DIR/${APP_NAME}.app"
 DMG_STAGE_DIR="$OUT_DIR/dmg-root"
 DMG_PATH="$OUT_DIR/${APP_NAME}.dmg"
@@ -55,6 +57,11 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$DMG_STAGE_DIR
 
 cp ".build/release/$APP_NAME" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+if [ -f "$ICON_SOURCE_PATH" ]; then
+  cp "$ICON_SOURCE_PATH" "$APP_DIR/Contents/Resources/$ICON_FILE_NAME"
+else
+  echo "warning: icon file not found at $ICON_SOURCE_PATH, packaging without custom icon"
+fi
 
 cat >"$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -69,6 +76,8 @@ cat >"$APP_DIR/Contents/Info.plist" <<PLIST
   <string>GitHubCollector</string>
   <key>CFBundleIdentifier</key>
   <string>com.sexyfeifan.GitHubCollector</string>
+  <key>CFBundleIconFile</key>
+  <string>${ICON_FILE_NAME}</string>
   <key>CFBundleVersion</key>
   <string>${BUILD_NUMBER}</string>
   <key>CFBundleShortVersionString</key>

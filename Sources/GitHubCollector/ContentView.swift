@@ -82,7 +82,10 @@ struct ContentView: View {
             }
         }
         .sheet(item: $detailRecord) { record in
-            RepoDetailView(record: record) {
+            RepoDetailView(
+                record: record,
+                onPullSource: { vm.pullSourceCode(record) }
+            ) {
                 detailRecord = nil
             }
             .frame(minWidth: 820, minHeight: 620)
@@ -91,7 +94,7 @@ struct ContentView: View {
             LogDetailView(logs: vm.realtimeLogs) {
                 showLogSheet = false
             }
-            .frame(minWidth: 920, minHeight: 620)
+            .frame(minWidth: 1320, minHeight: 700)
         }
         .onChange(of: vm.searchQuery) { _ in
             vm.resetPageToFirst()
@@ -175,11 +178,11 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text("抓取精度")
+                    Text("拉取进度")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(Int(vm.fetchPrecision * 100))%")
+                    Text("\(Int(vm.fetchPrecision * 100))% (\(vm.crawlProgressSummary))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -597,6 +600,7 @@ private struct RepoCard: View {
 
 private struct RepoDetailView: View {
     let record: RepoRecord
+    let onPullSource: () -> Void
     let onClose: () -> Void
     @State private var renderMarkdown = true
 
@@ -641,8 +645,12 @@ private struct RepoDetailView: View {
             }
 
             if let sourceURL = URL(string: record.sourceURL), !record.sourceURL.isEmpty {
-                Link(destination: sourceURL) {
-                    Label("打开 GitHub 项目页", systemImage: "link")
+                HStack(spacing: 10) {
+                    Link(destination: sourceURL) {
+                        Label("打开 GitHub 项目页", systemImage: "link")
+                    }
+                    Button("拉取源码", action: onPullSource)
+                        .buttonStyle(.bordered)
                 }
                 .font(.caption)
             }
@@ -663,7 +671,8 @@ private struct RepoDetailView: View {
                     section(
                         "搭建教程",
                         record.setupGuideZH.isEmpty ? "暂无可提取的搭建安装相关内容" : record.setupGuideZH,
-                        renderMarkdown: renderMarkdown
+                        renderMarkdown: renderMarkdown,
+                        codeLike: true
                     )
                     section(
                         "更新说明",
@@ -694,13 +703,24 @@ private struct RepoDetailView: View {
         return "\(readme)\n\n---\n\n## Release Notes\n\n\(notes)"
     }
 
-    private func section(_ title: String, _ text: String, renderMarkdown: Bool) -> some View {
+    private func section(_ title: String, _ text: String, renderMarkdown: Bool, codeLike: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if renderMarkdown {
+            if codeLike {
+                ScrollView([.vertical, .horizontal]) {
+                    Text(text)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(8)
+                }
+                .frame(height: 280)
+                .background(Color(NSColor.textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if renderMarkdown {
                 StyledMarkdownView(markdown: text)
                     .frame(height: 280)
             } else {

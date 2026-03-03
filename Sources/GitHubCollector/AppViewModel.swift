@@ -165,6 +165,12 @@ final class AppViewModel: ObservableObject {
     var canPauseCrawl: Bool { crawlState == .running }
     var canStopCrawl: Bool { crawlState != .idle }
     var canSkipCurrent: Bool { crawlState == .running && currentImportTask != nil }
+    var crawlProgressSummary: String {
+        let total = queueItems.count
+        guard total > 0 else { return "0/0" }
+        let finished = queueItems.filter { $0.status == .success || $0.status == .failed }.count
+        return "\(finished)/\(total)"
+    }
 
     func nextPage() {
         currentPage = min(currentPage + 1, totalPages)
@@ -513,6 +519,12 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func pullSourceCode(_ record: RepoRecord) {
+        Task {
+            await runSourcePull(record)
+        }
+    }
+
     func deleteRecord(_ record: RepoRecord, deleteFiles: Bool) {
         do {
             try storage.deleteRecord(record, baseDir: activeBaseDir, removeFiles: deleteFiles)
@@ -615,7 +627,7 @@ final class AppViewModel: ObservableObject {
                     markQueueFailed(url: urls[i], reason: reason)
                 }
 
-                fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
+                refreshQueueProgress()
                 i += 1
                 currentQueueIndex = i
             }
@@ -651,7 +663,7 @@ final class AppViewModel: ObservableObject {
                 markQueueFailed(url: url, reason: reason)
             }
 
-            fetchPrecision = Double(queueItems.filter { $0.status == .success }.count) / Double(max(queueItems.count, 1))
+            refreshQueueProgress()
             r += 1
             retryQueueIndex = r
         }
@@ -786,6 +798,16 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func refreshQueueProgress() {
+        let total = queueItems.count
+        guard total > 0 else {
+            fetchPrecision = 0
+            return
+        }
+        let finished = queueItems.filter { $0.status == .success || $0.status == .failed }.count
+        fetchPrecision = Double(finished) / Double(total)
+    }
+
     private func importOne(url: String, retries: Int, inactivityTimeout: TimeInterval = 30) async throws -> RepoRecord {
         var lastError: Error?
         let maxAttempt = max(1, min(retries, 5))
@@ -896,7 +918,7 @@ final class AppViewModel: ObservableObject {
         let classifyText = mergedDescription(repo: fetchedRepo, readme: cleanReadmeContent(readmeForProcessing))
 
         let config = TranslationConfig(apiKey: openAIKey, baseURL: openAIBaseURL, model: openAIModel)
-        let chineseDescription = await translator.summarizeReadmeToChinese(readmeForProcessing, config: config)
+        let chineseDescription = await translator.translateToChinese(readmeForProcessing, config: config)
         let chineseReleaseNotes = await translator.translateToChinese(releaseNotesEN, config: config)
         let setupGuide = await translator.extractSetupGuide(readmeForProcessing, config: config)
 
@@ -917,15 +939,12 @@ final class AppViewModel: ObservableObject {
         let projectDir: URL
         let previewImagePath: String
 
-        category = assets.isEmpty ? "无安装包项目" : classifier.classify(repo: fetchedRepo, text: classifyText)
+        category = classifier.classify(repo: fetchedRepo, text: classifyText)
         releaseTag = fetchedRelease?.tagName ?? "N/A"
         projectDir = storage.projectDir(baseDir: activeBaseDir, category: category, project: fetchedRepo.name)
         currentSavePathText = projectDir.path
 
-        let sourceDir = try await downloader.cloneRepository(repoURL: fetchedRepo.htmlURL, to: projectDir)
-        markDataActivity()
-        sourceCodePath = sourceDir.path
-        appendLog("已拉取源码：\(sourceCodePath)")
+        sourceCodePath = records.first(where: { $0.id == identity.fullName.lowercased() })?.sourceCodePath ?? ""
 
         if assets.isEmpty {
             hasDownloadAsset = false
@@ -1081,7 +1100,7 @@ final class AppViewModel: ObservableObject {
 
         statusMessage = "正在重新翻译：\(record.projectName)"
         var updated = record
-        updated.descriptionZH = await translator.summarizeReadmeToChinese(record.descriptionEN, config: config)
+        updated.descriptionZH = await translator.translateToChinese(record.descriptionEN, config: config)
         updated.setupGuideZH = await translator.extractSetupGuide(record.descriptionEN, config: config)
         updated.releaseNotesZH = await translator.translateToChinese(record.releaseNotesEN, config: config)
         updated.summaryZH = summarizer.summarize(updated.descriptionZH, fallbackTitle: record.projectName)
@@ -1093,6 +1112,33 @@ final class AppViewModel: ObservableObject {
             statusMessage = "已完成重新翻译：\(record.projectName)"
         } catch {
             errorMessage = "保存翻译结果失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func runSourcePull(_ record: RepoRecord) async {
+        guard let repoURL = URL(string: record.sourceURL), !record.sourceURL.isEmpty else {
+            errorMessage = "当前项目缺少有效的 GitHub 地址，无法拉取源码。"
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        statusMessage = "正在拉取源码：\(record.fullName)"
+        appendLog("手动拉取源码：\(record.fullName)")
+        do {
+            let projectDir = storage.projectDir(baseDir: activeBaseDir, category: record.category, project: record.projectName)
+            let sourceDir = try await downloader.cloneRepository(repoURL: repoURL, to: projectDir)
+            var updated = record
+            updated.sourceCodePath = sourceDir.path
+            updated.updatedAt = Date()
+            try storage.saveRecord(updated, baseDir: activeBaseDir)
+            reloadRecords()
+            statusMessage = "源码拉取完成：\(record.fullName)"
+            appendLog("源码拉取完成：\(sourceDir.path)")
+        } catch {
+            errorMessage = "源码拉取失败：\(error.localizedDescription)"
+            appendLog("源码拉取失败：\(record.fullName)，原因：\(error.localizedDescription)")
         }
     }
 
