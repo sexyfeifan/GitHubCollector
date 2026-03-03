@@ -105,6 +105,7 @@ tar \
   --exclude=.build-cache \
   --exclude=.clang-cache \
   --exclude=dist \
+  --exclude=GitHubCollectorArchive \
   --exclude=.DS_Store \
   -czf "$SOURCE_TAR_PATH" \
   -C "$ROOT_DIR" .
